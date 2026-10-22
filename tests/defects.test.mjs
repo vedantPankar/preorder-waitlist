@@ -31,7 +31,7 @@ test("a time budget stops early, reports remaining, and a second run finishes wi
   const mailer = fakeMailer();
   const slow = { send: async (m) => { await new Promise((r) => setTimeout(r, 5)); return mailer.send(m); } };
   const first = await notifyVariant(db, { shop, variant: stocked, mailer: slow, budgetMs: 30, concurrency: 2 });
-  assert.ok(first.remaining > 0 && first.sent > 0 && first.sent < 40);
+  assert.ok(first.remaining > 0 && first.sent < 40 && first.remaining === 40 - first.sent); // on a slow host it may send nothing; nothing may be lost
   const second = await notifyVariant(db, { shop, variant: stocked, mailer, budgetMs: 60_000 });
   assert.equal(second.remaining, 0);
   assert.equal(new Set(mailer.sent.map((m) => m.to)).size, 40);

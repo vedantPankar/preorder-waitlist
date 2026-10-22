@@ -55,6 +55,7 @@ async function openEvent(db, { shop, variant }) {
     });
   } catch (e) {
     if (e?.code !== "P2002") throw e;
+    // null: the run that won the race has already drained and closed the event (closing clears the key).
     return db.restockEvent.findUnique({ where: { openKey: key } });
   }
 }
@@ -78,6 +79,8 @@ export async function enqueueRestock(db, { shop, variant, limit = 100, now = new
   });
   if (!waiting.length) return { queued: 0, eventId: null };
   const event = await openEvent(db, { shop, variant });
+  // Closed by a concurrent run between our failed create and re-read: every entry we saw was already taken by it.
+  if (!event) return { queued: 0, eventId: null };
   let queued = 0;
   for (const entry of waiting) {
     // One batch: the delivery row (unique per event+entry, so a duplicate rolls the whole batch
