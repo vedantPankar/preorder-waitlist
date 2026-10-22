@@ -76,7 +76,7 @@ Apply migrations: `npx prisma migrate deploy` (the Docker `setup` script does th
 Scopes: `write_products, write_metaobjects, write_metaobject_definitions, read_inventory, read_customers`.
 Webhooks: `app/uninstalled`, `app/scopes_update`, `inventory_levels/update` and the three privacy topics.
 
-**Ship-date emails are dormant until the order webhooks are enabled.** The handlers
+**The pre-order confirmation and ship-date emails are dormant until the order webhooks are enabled.** The handlers
 (`app/routes/webhooks.orders.create.jsx`, `webhooks.orders.cancelled.jsx`) exist, but the `read_orders` scope
 and the `orders/create` / `orders/cancelled` subscriptions are **not** in `shopify.app.toml`: Shopify refuses to
 start the app ("not approved to subscribe to webhook topics containing protected customer data") until the app
@@ -93,12 +93,12 @@ Protected customer data access > request access, then add `read_orders` to `scop
   topics = [ "orders/cancelled" ]
 ```
 
-Until then the Settings toggles for ship-date reminders and change notices have no pre-order customers to email.
-The signup confirmation and back-in-stock emails are unaffected.
+Until then the Settings toggles for the pre-order confirmation, ship-date reminders and change notices have no pre-order
+customers to email. The signup confirmation and back-in-stock emails are unaffected.
 
-`read_orders` and the two order webhooks exist only for ship-date emails (below): the app stores, per
-pre-order line, the Shopify customer id, order number and product facts, never a name, email or
-address. Merchants must approve the new scope when the app updates, and Shopify requires **protected
+`read_orders` and the two order webhooks exist only for the pre-order confirmation and ship-date emails (below): the app
+stores, per pre-order line, the Shopify customer id, order number and product facts, and the buyer's email address only
+while the shop sends through Gmail (it needs it to send); never a name or postal address. Merchants must approve the new scope when the app updates, and Shopify requires **protected
 customer data access** for apps that read orders (Partner Dashboard > the app > API access
 requirements). Purchases are still not attributed to notifications or campaigns.
 
@@ -171,17 +171,18 @@ Besides the back-in-stock email, the app can send three more, each with its own 
 | Email | Fires |
 |---|---|
 | Waitlist signup confirmation | right after someone joins a waitlist |
+| Pre-order confirmation | right after an order containing pre-order items is placed: one email per order listing the items, quantities and expected ship dates (needs the order webhooks) |
 | Ship-date reminder | N days before the expected ship date (Settings, default 3), once per ship date |
 | Ship-date change | when the expected ship date of an open pre-order changes, once per change |
 
-Ship-date emails go to the address on the pre-order's order, which the app keeps only while Gmail is connected (it needs
+The pre-order confirmation and ship-date emails go to the address on the pre-order's order, which the app keeps only while Gmail is connected (it needs
 the order webhooks). An order with no address is listed in Notification activity as `skipped: no email address`.
 Reminders and change notices are only sent while the app is running its queue: use the in-process worker
 (`NOTIFY_WORKER_INTERVAL_MS`) or the scheduler endpoint (`CRON_SECRET`); a webhook alone does not trigger them.
 
 **How it is checked:** automated tests cover the queue, retries, duplicate prevention, the Settings toggles, the order
 webhooks and privacy deletion against a fake SMTP transport. Check on the development store before relying on it:
-join a waitlist and expect the confirmation; place a pre-order, bring its ship date inside the reminder window and press
+join a waitlist and expect the confirmation; place a pre-order and expect the pre-order confirmation (toggle on); then, bring its ship date inside the reminder window and press
 **Process queue now** for the reminder; edit the ship date and run the queue again for the change notice.
 
 ## Privacy

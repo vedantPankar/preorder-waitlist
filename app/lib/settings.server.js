@@ -18,7 +18,7 @@ export function settingsView(row) {
     fromName: s.fromName ?? "", replyToEmail: s.replyToEmail ?? "", subject: s.subject ?? DEFAULT_SUBJECT,
     retentionDays: s.retentionDays ?? 90, waitlistEnabled: s.waitlistEnabled ?? true, requirePreorderLogin: s.requirePreorderLogin ?? false,
     gmailAddress: s.gmailAddress ?? "", gmailConfigured: Boolean(s.gmailAddress && s.gmailPasswordEnc), dailySendCap: s.dailySendCap ?? DEFAULT_DAILY_CAP, // never the password, not even encrypted
-    emailSignupConfirmation: s.emailSignupConfirmation ?? false, emailShipReminder: s.emailShipReminder ?? false, emailShipDateChange: s.emailShipDateChange ?? false, shipReminderDays: s.shipReminderDays ?? 3,
+    emailSignupConfirmation: s.emailSignupConfirmation ?? false, emailPreorderConfirmation: s.emailPreorderConfirmation ?? false, emailShipReminder: s.emailShipReminder ?? false, emailShipDateChange: s.emailShipDateChange ?? false, shipReminderDays: s.shipReminderDays ?? 3,
     restockCoveragePct: s.restockCoveragePct ?? 50, restockBuffer: s.restockBuffer ?? 0, trackClicks: s.trackClicks ?? false,
     defaultButtonText: s.defaultButtonText ?? "Pre-Order Now", defaultMaxQuantity: s.defaultMaxQuantity ?? "", defaultTargetUnits: s.defaultTargetUnits ?? "",
     defaultShowCountdown: s.defaultShowCountdown ?? false, defaultShowProgress: s.defaultShowProgress ?? false,
@@ -91,7 +91,7 @@ export function parseSettingsForm(form, current, { isValidEmail, cleanText }) {
   };
   // Checkboxes: only trust them when the form that carries them was submitted (it always sends retentionDays).
   const settingsForm = form.get("_form") === "settings" || has("retentionDays");
-  for (const key of ["waitlistEnabled", "requirePreorderLogin", "emailSignupConfirmation", "emailShipReminder", "emailShipDateChange", "trackClicks", "defaultShowCountdown", "defaultShowProgress"]) data[key] = settingsForm ? flag(form.get(key)) : v[key];
+  for (const key of ["waitlistEnabled", "requirePreorderLogin", "emailSignupConfirmation", "emailPreorderConfirmation", "emailShipReminder", "emailShipDateChange", "trackClicks", "defaultShowCountdown", "defaultShowProgress"]) data[key] = settingsForm ? flag(form.get(key)) : v[key];
   if (["buttonStyle", "buttonColor", "buttonTextColor", "progressColor", "countdownStyle"].some(has)) data.displayCustomized = true;
   return Object.keys(errors).length ? { errors } : { data };
 }

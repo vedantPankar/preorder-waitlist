@@ -252,6 +252,18 @@ try {
   check("extra emails: with Gmail connected and the toggle on, a signup queues a confirmation, and the signup itself still works", r.status === 200 && (await db.notificationDelivery.count({ where: { shop: SHOP, kind: "SIGNUP_CONFIRMATION" } })) === 1);
   await waitFor(() => logs().some((l) => l.kind === "email" && /on the list/.test(l.subject ?? "")));
   check("extra emails: the confirmation is sent through Gmail to the signup address", logs().some((l) => l.kind === "email" && l.to === "newcomer@example.com" && /on the list/.test(l.subject)));
+  const confirmations = () => logs().filter((l) => l.kind === "email" && /pre-order is confirmed/.test(l.subject ?? ""));
+  await webhook("orders/create", orderBody(7050, { id: 4300, email: "early@example.com" }), { id: "ord-conf-off" });
+  await sleep(400);
+  check("orders: with the confirmation toggle off, a pre-order sends no confirmation", confirmations().length === 0);
+  await admin(SHOP, "/app/settings.data", { ...extraForm, emailPreorderConfirmation: "on" });
+  check("extra emails: Settings saves the pre-order confirmation toggle", (await settingsRow()).emailPreorderConfirmation === true);
+  await webhook("orders/create", orderBody(7100, { id: 4301, email: "orderer@example.com" }), { id: "ord-conf-1" });
+  await waitFor(() => confirmations().length >= 1);
+  check("orders: with the toggle on, a pre-order is confirmed through Gmail to the order's address", confirmations().length === 1 && confirmations()[0].to === "orderer@example.com" && /Shoe/.test(confirmations()[0].subject), JSON.stringify(confirmations()));
+  await webhook("orders/create", orderBody(7100, { id: 4301, email: "orderer@example.com" }), { id: "ord-conf-retry" });
+  await sleep(500);
+  check("orders: a redelivered webhook sends no second confirmation", confirmations().length === 1);
 
   // ---- Gmail sending settings (nothing here contacts Gmail: no valid app password is ever submitted)
   const GPW = "abcdefghijklmnop", gmailRow = () => db.shopSettings.findUnique({ where: { shop: SHOP } });

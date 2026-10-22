@@ -1,12 +1,13 @@
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { recordPreorderOrder } from "../lib/preorder-orders.server";
-import { getEmailStatus } from "../lib/shop-mailer.server";
+import { handleOrderCreate } from "../lib/order-created.server";
+import { processFlowDeliveries } from "../lib/flow-notify.server";
+import { getEmailStatus, getShopMailer } from "../lib/shop-mailer.server";
 
 export const action = async ({ request }) => {
-  const { shop, payload } = await authenticate.webhook(request);
-  // The buyer's address is only kept when the shop sends through Gmail, which needs it for ship-date emails.
-  const channel = (await getEmailStatus(db, shop)).channel;
-  await recordPreorderOrder(db, { shop, payload, storeEmail: channel === "smtp" });
+  const { shop, payload, admin } = await authenticate.webhook(request);
+  const { confirmationQueued } = await handleOrderCreate({ db, shop, payload, admin, emailStatus: await getEmailStatus(db, shop) });
+  // Send the queued confirmation after answering Shopify. If this is lost (process exit) the queue runner sends it later.
+  if (confirmationQueued) setImmediate(async () => processFlowDeliveries(db, { shop, mailer: await getShopMailer(db, shop), budgetMs: 8000 }).catch((e) => console.error("Pre-order confirmation send failed:", e?.message)));
   return new Response();
 };

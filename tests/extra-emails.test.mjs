@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { createTestDb, variant } from "./helpers.mjs";
 import { addSignup } from "../app/lib/waitlist.server.js";
 import { handleSignupRequest } from "../app/lib/signup.server.js";
-import { enqueueSignupConfirmation, enqueueShipEmails, processFlowDeliveries, runFlowKinds, dateKey, SKIP_NO_EMAIL } from "../app/lib/flow-notify.server.js";
-import { buildShipEmail, buildSignupConfirmationEmail } from "../app/lib/email-templates.server.js";
+import { enqueueSignupConfirmation, enqueueShipEmails, enqueuePreorderConfirmation, processFlowDeliveries, runFlowKinds, dateKey, SKIP_NO_EMAIL } from "../app/lib/flow-notify.server.js";
+import { handleOrderCreate } from "../app/lib/order-created.server.js";
+import { buildShipEmail, buildSignupConfirmationEmail, buildPreorderConfirmationEmail } from "../app/lib/email-templates.server.js";
 import { processQueue, enqueueRestock, retryFailedDeliveries, MAX_ATTEMPTS } from "../app/lib/notify.server.js";
 import { runQueueForShop, shopsWithDueWork, queueDepth } from "../app/lib/queue-runner.server.js";
 import { recordPreorderOrder, cancelPreorderOrder } from "../app/lib/preorder-orders.server.js";
@@ -64,7 +65,11 @@ test("settings: new emails are off by default, 3 days, validated, saved and kept
   const deps = { isValidEmail, cleanText };
   const f = (o) => new URLSearchParams(o);
   const v = settingsView(null);
-  assert.deepEqual([v.emailSignupConfirmation, v.emailShipReminder, v.emailShipDateChange, v.shipReminderDays], [false, false, false, 3]);
+  assert.deepEqual([v.emailSignupConfirmation, v.emailShipReminder, v.emailShipDateChange, v.shipReminderDays, v.emailPreorderConfirmation], [false, false, false, 3, false]);
+  const conf = parseSettingsForm(f({ _form: "settings", emailPreorderConfirmation: "on", shipReminderDays: "3" }), null, deps).data;
+  assert.equal(conf.emailPreorderConfirmation, true);
+  assert.equal(parseSettingsForm(f({ _form: "settings", shipReminderDays: "3" }), conf, deps).data.emailPreorderConfirmation, false, "an unchecked box turns it off");
+  assert.equal(parseSettingsForm(f({ restockBuffer: "1" }), conf, deps).data.emailPreorderConfirmation, true, "a form without the field keeps it");
   const on = parseSettingsForm(f({ _form: "settings", emailSignupConfirmation: "on", emailShipReminder: "on", emailShipDateChange: "on", shipReminderDays: "5" }), null, deps).data;
   assert.deepEqual([on.emailSignupConfirmation, on.emailShipReminder, on.emailShipDateChange, on.shipReminderDays], [true, true, true, 5]);
   const off = parseSettingsForm(f({ _form: "settings", shipReminderDays: "3" }), on, deps).data;
@@ -350,6 +355,104 @@ test("runner: one pass queues ship-date emails and sends them; the scheduler see
   const sent = [];
   assert.deepEqual(await runFlowKinds(db, { shop: shop2, admin, mailer: { send: async (m) => sent.push(m) }, now: NOW }), idle);
   assert.equal((await deliveries(shop2)).length, 0);
+});
+
+// ---- pre-order confirmation ---------------------------------------------------------------------------------
+
+test("pre-order confirmation wording: one email lists every pre-order item with its quantity and ship date", () => {
+  const one = buildPreorderConfirmationEmail({ shop: "s.myshopify.com", orderName: "#1001", lines: [{ productTitle: "Shoe", variantTitle: "Red", quantity: 2, shipDate: "2026-11-13", productHandle: "shoe" }] });
+  assert.equal(one.subject, "Your pre-order is confirmed: Shoe (Red)");
+  assert.match(one.text, /2 × Shoe \(Red\)/); assert.match(one.text, /13 November 2026/); assert.match(one.text, /order #1001/);
+  assert.match(one.text, /https:\/\/s\.myshopify\.com\/products\/shoe/);
+  const two = buildPreorderConfirmationEmail({ shop: "s.myshopify.com", orderName: "#1002", lines: [
+    { productTitle: "Shoe <b>", variantTitle: "", quantity: 1, shipDate: "2026-11-13", productHandle: "shoe" },
+    { productTitle: "Hat", variantTitle: "Blue", quantity: 3, shipDate: null, productHandle: "hat" }] });
+  assert.equal(two.subject, "Your pre-order is confirmed: Shoe <b> and 1 more");
+  assert.ok(two.html.includes("Shoe &lt;b&gt;") && !two.html.includes("<b>"), "HTML is escaped");
+  assert.match(two.text, /3 × Hat \(Blue\)/);
+  assert.doesNotMatch(two.text.split("\n").find((l) => l.includes("Hat")), /ship/, "an item without a date says nothing about shipping");
+});
+
+const twoLineOrder = (o = {}) => orderPayload({
+  id: 6001, name: "#6001",
+  line_items: [
+    { id: 1, variant_id: 111, product_id: 999, title: "Shoe", variant_title: "Red", quantity: 2, properties: [{ name: "_preorder", value: "true" }, { name: "_preorder_ship_date", value: "2026-11-13" }] },
+    { id: 2, variant_id: 333, product_id: 998, title: "Hat", variant_title: "Blue", quantity: 1, properties: [{ name: "_preorder", value: "true" }, { name: "_preorder_ship_date", value: "2026-12-01" }] },
+    { id: 3, variant_id: 444, product_id: 997, title: "Sock", quantity: 1, properties: [] },
+  ],
+  ...o,
+});
+const seedTwo = async (shop) => { await seedConfig(shop); await seedConfig(shop, { productId: "998", variantId: "333", productTitle: "Hat", variantTitle: "Blue", shipDate: D("2026-12-01") }); };
+const handlesFor = async () => new Map([["111", "shoe"], ["333", "hat"]]);
+
+test("pre-order confirmation: ONE email per order, listing only the pre-order lines, queued once", async () => {
+  const shop = newShop();
+  await seedTwo(shop);
+  await record(shop, twoLineOrder());
+  assert.deepEqual(await enqueuePreorderConfirmation(db, { shop, orderId: "6001", resolveHandles: handlesFor }), { queued: true });
+  assert.deepEqual(await enqueuePreorderConfirmation(db, { shop, orderId: "6001", resolveHandles: handlesFor }), { queued: false }, "a webhook retry queues nothing");
+  const [d] = await deliveries(shop);
+  assert.deepEqual([(await deliveries(shop)).length, d.kind, d.status, d.eventId], [1, "PREORDER_CONFIRMATION", "QUEUED", "confirm:6001"]);
+  const p = JSON.parse(d.payload);
+  assert.deepEqual(p.lines.map((l) => [l.productTitle, l.quantity, l.shipDate, l.productHandle]), [["Shoe", 2, "2026-11-13", "shoe"], ["Hat", 1, "2026-12-01", "hat"]]);
+  assert.ok(!d.payload.includes("@"), "no email address in the payload");
+  const mailer = recorder();
+  assert.equal((await processFlowDeliveries(db, { shop, mailer, now: NOW })).sent, 1);
+  assert.deepEqual([mailer.sent[0].to, mailer.sent[0].subject], ["known@x.com", "Your pre-order is confirmed: Shoe (Red) and 1 more"]);
+  assert.ok(mailer.sent[0].text.includes("Hat") && !mailer.sent[0].text.includes("Sock"));
+  assert.equal((await processFlowDeliveries(db, { shop, mailer, now: NOW })).sent, 0, "never twice");
+});
+
+test("pre-order confirmation: no address is skipped, a cancelled order is not confirmed, a normal order queues nothing", async () => {
+  const shop = newShop();
+  await seedTwo(shop);
+  await recordPreorderOrder(db, { shop, payload: twoLineOrder({ id: 1, customer: null }) });       // no address stored
+  assert.deepEqual(await enqueuePreorderConfirmation(db, { shop, orderId: "1", resolveHandles: handlesFor }), { queued: false });
+  const [skipped] = await deliveries(shop);
+  assert.deepEqual([skipped.status, skipped.lastError], ["SKIPPED", SKIP_NO_EMAIL]);
+  await record(shop, twoLineOrder({ id: 2 }));
+  await cancelPreorderOrder(db, { shop, payload: { id: 2 } });
+  assert.deepEqual(await enqueuePreorderConfirmation(db, { shop, orderId: "2", resolveHandles: handlesFor }), { queued: false });
+  await record(shop, orderPayload({ id: 3, line_items: [{ id: 1, variant_id: 5, product_id: 1, title: "Plain", quantity: 1, properties: [] }] }));
+  assert.deepEqual(await enqueuePreorderConfirmation(db, { shop, orderId: "3", resolveHandles: handlesFor }), { queued: false });
+  assert.equal((await deliveries(shop)).length, 1, "only the skipped record exists");
+});
+
+test("orders/create: the confirmation is queued only when the toggle is on AND Gmail can send; the order is always recorded", async () => {
+  const shop = newShop();
+  await seedTwo(shop);
+  const ready = { configured: true, channel: "smtp" };
+  const run = (id, status, payload = twoLineOrder({ id })) => handleOrderCreate({ db, shop, payload, admin: adminStub(), emailStatus: status });
+  // toggle off (no settings row)
+  let r = await run(6101, ready);
+  assert.deepEqual([r.stored, r.confirmationQueued], [2, false]);
+  await db.shopSettings.create({ data: { shop, emailPreorderConfirmation: true } });
+  // toggle on, Gmail not connected: recorded without an address, nothing queued
+  r = await run(6102, { configured: false, channel: null });
+  assert.deepEqual([r.stored, r.confirmationQueued], [2, false]);
+  assert.equal((await db.preorderOrder.findFirst({ where: { shop, orderId: "6102" } })).email, null, "the address is only kept when Gmail sends");
+  assert.equal((await deliveries(shop)).length, 0);
+  // toggle on + Gmail: queued, the address is kept, a webhook retry queues nothing more
+  r = await run(6103, ready);
+  assert.deepEqual([r.stored, r.confirmationQueued], [2, true]);
+  assert.equal((await db.preorderOrder.findFirst({ where: { shop, orderId: "6103" } })).email, "known@x.com");
+  r = await run(6103, ready);
+  assert.deepEqual([r.stored, r.confirmationQueued], [0, false]);
+  assert.deepEqual((await deliveries(shop)).map((d) => [d.kind, d.eventId]), [["PREORDER_CONFIRMATION", "confirm:6103"]]);
+  // an order without pre-order lines is ignored entirely
+  r = await run(6104, ready, orderPayload({ id: 6104, line_items: [{ id: 1, variant_id: 5, product_id: 1, title: "Plain", quantity: 1, properties: [] }] }));
+  assert.deepEqual([r.stored, r.confirmationQueued], [0, false]);
+});
+
+test("pre-order confirmation: customers/redact removes the queued confirmation", async () => {
+  const shop = newShop();
+  await seedTwo(shop);
+  await record(shop, twoLineOrder());
+  await enqueuePreorderConfirmation(db, { shop, orderId: "6001", resolveHandles: handlesFor });
+  assert.equal((await deliveries(shop)).length, 1);
+  await handleCustomerRedact({ db, shop, payload: { customer: { id: 77, email: "known@x.com" } } });
+  assert.equal((await deliveries(shop)).length, 0);
+  assert.equal(await db.preorderOrder.count({ where: { shop } }), 0);
 });
 
 // ---- privacy ----------------------------------------------------------------------------------------------

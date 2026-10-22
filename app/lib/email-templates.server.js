@@ -36,3 +36,19 @@ export function buildShipEmail(kind, { shop, productTitle, variantTitle, orderNa
     ),
   };
 }
+
+/** One email per order, listing every pre-order item: `lines` = [{ productTitle, variantTitle, quantity, shipDate, productHandle }]. */
+export function buildPreorderConfirmationEmail({ shop, orderName, lines }) {
+  const first = lines[0];
+  const more = lines.length > 1 ? ` and ${lines.length - 1} more` : "";
+  const order = orderName ? ` (order ${orderName})` : "";
+  const items = lines.map((l) => `${l.quantity} × ${productName(l)}${l.shipDate ? `, expected to ship on ${longDate(l.shipDate)}` : ""}`);
+  return {
+    subject: `Your pre-order is confirmed: ${productName(first)}${more}`.slice(0, 200),
+    ...wrap(
+      [`Thank you! We've received your pre-order${order}.`, ...items],
+      productUrl(shop, first.productHandle),
+      "You received this email because you placed a pre-order. Dates are estimates and can change.",
+    ),
+  };
+}

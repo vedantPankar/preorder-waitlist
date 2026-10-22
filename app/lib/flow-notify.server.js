@@ -1,14 +1,14 @@
 // Emails other than back-in-stock, sent through the shop's Gmail: waitlist signup confirmation, pre-order
-// ship-date reminder and ship-date change notice. They ride the same NotificationDelivery table, lease/retry rules
+// confirmation, ship-date reminder and ship-date change notice. They ride the same NotificationDelivery table, lease/retry rules
 // and Notification activity page as restock emails, distinguished by `kind`.
 // (The file keeps its historical name; it no longer has anything to do with Shopify Flow.)
 import { randomBytes } from "node:crypto";
-import { buildShipEmail, buildSignupConfirmationEmail } from "./email-templates.server";
+import { buildPreorderConfirmationEmail, buildShipEmail, buildSignupConfirmationEmail } from "./email-templates.server";
 import { MAX_ATTEMPTS, backoffMs } from "./notify.server";
 import { effectiveShipDate } from "./campaign.server";
 import { fetchVariants } from "./shopify-data.server";
 
-export const FLOW_KINDS = ["SIGNUP_CONFIRMATION", "SHIP_REMINDER", "SHIP_DATE_CHANGE"];
+export const FLOW_KINDS = ["SIGNUP_CONFIRMATION", "PREORDER_CONFIRMATION", "SHIP_REMINDER", "SHIP_DATE_CHANGE"];
 const LEASE_MS = 5 * 60 * 1000;
 const DAY = 24 * 60 * 60 * 1000;
 const CONCURRENCY = 5;
@@ -42,6 +42,35 @@ export async function enqueueSignupConfirmation(db, { shop, entry, variant, now 
 }
 
 export const SKIP_NO_EMAIL = "skipped: no email address";
+
+/**
+ * Queues ONE confirmation for an order that contains pre-order lines (idempotent per order: a webhook retry queues
+ * nothing). It goes to the address stored on the order; an order without one is recorded as skipped.
+ * `resolveHandles(variantIds)` -> Map(variantId -> product handle), only called when something is about to be queued.
+ */
+export async function enqueuePreorderConfirmation(db, { shop, orderId, resolveHandles = async () => new Map(), now = new Date() }) {
+  const rows = await db.preorderOrder.findMany({ where: { shop, orderId, status: "OPEN" }, orderBy: { createdAt: "asc" } });
+  if (!rows.length) return { queued: false };
+  const first = rows[0];
+  const guest = !first.email;
+  const handles = guest ? new Map() : await resolveHandles([...new Set(rows.map((r) => r.variantId))]);
+  const payload = {
+    orderName: first.orderName ?? "", productTitle: first.productTitle, variantTitle: first.variantTitle ?? "",
+    lines: rows.map((r) => ({ productTitle: r.productTitle, variantTitle: r.variantTitle ?? "", quantity: r.quantity, shipDate: r.lastShipDate ? dateKey(r.lastShipDate) : null, productHandle: handles.get(r.variantId) ?? "" })),
+  };
+  try {
+    await db.notificationDelivery.create({
+      data: {
+        shop, kind: "PREORDER_CONFIRMATION", eventId: `confirm:${orderId}`, entryId: first.id, variantId: first.variantId, trackingToken: newToken(),
+        nextAttemptAt: now, queuedAt: now, status: guest ? "SKIPPED" : "QUEUED", lastError: guest ? SKIP_NO_EMAIL : null, payload: JSON.stringify(payload),
+      },
+    });
+    return { queued: !guest };
+  } catch (e) {
+    if (!isUnique(e)) throw e;
+    return { queued: false };
+  }
+}
 
 /** Gmail sends a real email, so it needs the order's address; an order without one is recorded as skipped. */
 function shipDelivery({ shop, kind, order, ship, handle, now }) {
@@ -150,7 +179,9 @@ export async function processFlowDeliveries(db, { shop, mailer, now = new Date()
       to = entry.email;
     }
     try {
-      const body = delivery.kind === "SIGNUP_CONFIRMATION" ? buildSignupConfirmationEmail({ shop, ...p }) : buildShipEmail(delivery.kind, { shop, ...p });
+      const body = delivery.kind === "SIGNUP_CONFIRMATION" ? buildSignupConfirmationEmail({ shop, ...p })
+        : delivery.kind === "PREORDER_CONFIRMATION" ? buildPreorderConfirmationEmail({ shop, ...p })
+        : buildShipEmail(delivery.kind, { shop, ...p });
       await mailer.send({ to, ...body, fromName: settings?.fromName || undefined, replyTo: settings?.replyToEmail || undefined, idempotencyKey: delivery.id });
       await finish(d, delivery, { status: "ACCEPTED", acceptedAt: new Date(), lastError: null }, "ACCEPTED");
       summary.sent++;

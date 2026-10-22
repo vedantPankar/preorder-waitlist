@@ -108,7 +108,8 @@ model ShopSettings {
   waitlistEnabled    Boolean   @default(true)
   // Pre-orders need a logged-in customer (enforced by /apps/waitlist/reserve). Off = guests may pre-order.
   requirePreorderLogin Boolean @default(false)
-  // Shopify Flow emails (off by default; need EMAIL_PROVIDER=shopify_flow).
+  // Extra emails sent through the shop's Gmail (all off by default).
+  emailPreorderConfirmation Boolean @default(false)
   emailSignupConfirmation Boolean @default(false)
   emailShipReminder       Boolean @default(false)
   emailShipDateChange     Boolean @default(false)
@@ -186,7 +187,7 @@ model RestockEvent {
 model NotificationDelivery {
   id                String    @id @default(cuid())
   shop              String
-  // RESTOCK | SIGNUP_CONFIRMATION | SHIP_REMINDER | SHIP_DATE_CHANGE. For the last three, entryId is the
+  // RESTOCK | SIGNUP_CONFIRMATION | PREORDER_CONFIRMATION | SHIP_REMINDER | SHIP_DATE_CHANGE. For all but RESTOCK, entryId is the
   // waitlist entry / pre-order record id and eventId is the de-duplication key (see flow-notify.server.js).
   kind              String    @default("RESTOCK")
   payload           String?
