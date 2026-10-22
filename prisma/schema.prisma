@@ -1,0 +1,312 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+// Waitlist signup. One row per (shop, email, variant); re-signup after a
+// notification re-activates the same row, which keeps duplicates impossible
+// even under concurrent requests.
+// status: ACTIVE | SENDING | NOTIFIED | FAILED | REMOVED
+model WaitlistEntry {
+  id             String    @id @default(cuid())
+  shop           String
+  email          String
+  productId      String
+  variantId      String
+  productTitle   String
+  variantTitle   String?
+  productHandle  String?
+  status         String    @default("ACTIVE")
+  attempts       Int       @default(0)
+  lastError      String?
+  sendingSince   DateTime?
+  notifiedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  // When the customer (re)joined. Unlike createdAt it is reset when a notified
+  // customer signs up again, so demand analytics count genuine new interest.
+  signedUpAt     DateTime  @default(now())
+  // JSON [{name, value}] of the variant's options (size, colour...) captured at signup.
+  optionsJson    String?
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([shop, email, variantId])
+  @@index([shop, status])
+  @@index([shop, variantId, status])
+  @@index([shop, status, signedUpAt])
+  @@index([shop, productId, status])
+}
+
+model PreorderConfig {
+  id                      String   @id @default(cuid())
+  shop                    String
+  productId               String
+  variantId               String
+  productTitle            String
+  variantTitle            String?
+  enabled                 Boolean  @default(true)
+  buttonText              String   @default("Pre-Order Now")
+  shipDate                DateTime?
+  maxQuantity             Int?
+  // Units sold beyond zero stock (= -inventoryQuantity), refreshed by inventory webhooks.
+  soldCount               Int      @default(0)
+  previousInventoryPolicy String?
+  // Set when the variant belongs to a campaign. Then shipDate/maxQuantity left empty here
+  // inherit the campaign's values (no second source of truth).
+  campaignId              String?
+  // Units held by in-progress reservations (see PreorderReservation). Only changed by
+  // atomic conditional updates; never read-modify-write in application code.
+  reservedCount           Int      @default(0)
+  // Id of the reservation whose increment last succeeded; lets the reservation row be
+  // inserted in the same batch only if (and only if) the conditional increment applied.
+  holdToken               String?
+  // Whether this app last left the variant open for selling at zero stock (policy CONTINUE).
+  policyOpen              Boolean  @default(false)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  @@unique([shop, variantId])
+  @@index([shop, productId])
+  @@index([shop, campaignId])
+}
+
+model ShopSettings {
+  shop               String    @id
+  fromName           String?
+  replyToEmail       String?
+  subject            String    @default("{{product}} is back in stock")
+  retentionDays      Int       @default(90)
+  waitlistEnabled    Boolean   @default(true)
+  // Pre-orders need a logged-in customer (enforced by /apps/waitlist/reserve). Off = guests may pre-order.
+  requirePreorderLogin Boolean @default(false)
+  // Shopify Flow emails (off by default; need EMAIL_PROVIDER=shopify_flow).
+  emailSignupConfirmation Boolean @default(false)
+  emailShipReminder       Boolean @default(false)
+  emailShipDateChange     Boolean @default(false)
+  shipReminderDays        Int     @default(3)
+  // Own sending through Gmail SMTP (app password). The password is stored encrypted (see secrets.server.js) and is never
+  // read back to the browser. All empty = not configured = the environment-based sender is used.
+  gmailAddress            String?
+  gmailPasswordEnc        String?
+  // Set when Gmail rejected the sign-in (a configuration problem, not a transient one); cleared by saving a password.
+  gmailAuthError          String?
+  gmailAuthErrorAt        DateTime?
+  // Sends per day through the Gmail account (shared across shops using the same account; see EmailQuota).
+  dailySendCap            Int     @default(400)
+  // Restock recommendation rule: suggested units = ceil(waiting * coveragePct / 100) + buffer.
+  restockCoveragePct Int       @default(50)
+  restockBuffer      Int       @default(0)
+  // Opt-in: route email links through the app so clicks can be counted. Off by default (privacy).
+  trackClicks        Boolean   @default(false)
+  // Defaults offered when creating pre-orders / campaigns (null = no default limit/goal).
+  defaultButtonText  String    @default("Pre-Order Now")
+  defaultMaxQuantity Int?
+  defaultTargetUnits Int?
+  defaultShowCountdown Boolean @default(false)
+  defaultShowProgress  Boolean @default(false)
+  // Storefront look. Only sent to the storefront once the merchant has saved it (displayCustomized).
+  displayCustomized  Boolean   @default(false)
+  buttonStyle        String    @default("solid")
+  buttonColor        String    @default("#006F5C")
+  buttonTextColor    String    @default("#FFFFFF")
+  progressColor      String    @default("#006F5C")
+  countdownStyle     String    @default("dhms")
+  lastNotifyError    String?
+  lastNotifyErrorAt  DateTime?
+  updatedAt          DateTime  @updatedAt
+}
+
+// Idempotency log for webhook deliveries (X-Shopify-Webhook-Id).
+model ProcessedWebhook {
+  id        String   @id @default(cuid())
+  shop      String
+  webhookId String
+  topic     String
+  createdAt DateTime @default(now())
+
+  @@unique([shop, webhookId])
+  @@index([createdAt])
+}
+
+// One restock of one variant. While OPEN, newly eligible entries join it; deliveries
+// are unique per (event, entry) so a restock can never email the same person twice.
+// openKey is "shop:variantId" while OPEN and NULL afterwards, which makes a second
+// concurrent OPEN event impossible (unique) without blocking later events.
+model RestockEvent {
+  id                String   @id @default(cuid())
+  shop              String
+  variantId         String
+  productId         String
+  productTitle      String
+  variantTitle      String?
+  inventoryQuantity Int
+  status            String   @default("OPEN") // OPEN | COMPLETE
+  openKey           String?  @unique
+  createdAt         DateTime @default(now())
+  completedAt       DateTime?
+
+  @@index([shop, variantId, status])
+  @@index([shop, createdAt])
+}
+
+// Durable notification queue: one row per (restock event, waitlist entry).
+// status: QUEUED -> SENDING (leased) -> ACCEPTED (provider accepted the send)
+//         | QUEUED again with backoff after a transient failure
+//         | FAILED (permanent or attempts exhausted; merchant can retry) | SKIPPED
+// ACCEPTED means the provider took the message. It is NOT proof of inbox delivery.
+model NotificationDelivery {
+  id                String    @id @default(cuid())
+  shop              String
+  // RESTOCK | SIGNUP_CONFIRMATION | SHIP_REMINDER | SHIP_DATE_CHANGE. For the last three, entryId is the
+  // waitlist entry / pre-order record id and eventId is the de-duplication key (see flow-notify.server.js).
+  kind              String    @default("RESTOCK")
+  payload           String?
+  eventId           String
+  entryId           String
+  variantId         String
+  targetPath        String?
+  status            String    @default("QUEUED")
+  attempts          Int       @default(0)
+  nextAttemptAt     DateTime  @default(now())
+  lockedUntil       DateTime?
+  providerMessageId String?
+  lastError         String?
+  trackingToken     String    @unique
+  queuedAt          DateTime  @default(now())
+  acceptedAt        DateTime?
+  clickedAt         DateTime?
+  clickCount        Int       @default(0)
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([eventId, entryId])
+  @@index([shop, status, nextAttemptAt])
+  @@index([shop, variantId, status])
+  @@index([shop, queuedAt])
+  @@index([entryId])
+  @@index([shop, kind, status, nextAttemptAt])
+}
+
+// One row per pre-order line item, so ship-date emails know who to tell. Holds a Shopify customer id and
+// product facts only (no name, email or address). lastShipDate = the date the customer was last told.
+model PreorderOrder {
+  id           String    @id @default(cuid())
+  shop         String
+  orderId      String
+  lineItemId   String
+  orderName    String?
+  customerId   String?
+  variantId    String
+  productId    String
+  productTitle String
+  variantTitle String?
+  // Only stored when the shop sends through its own channel (Gmail), which needs the address; never for Flow.
+  email        String?
+  quantity     Int       @default(1)
+  status       String    @default("OPEN") // OPEN | CANCELLED
+  lastShipDate DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@unique([shop, orderId, lineItemId])
+  @@index([shop, status])
+  @@index([shop, customerId])
+  @@index([shop, variantId, status])
+}
+
+// Audit trail of every send attempt (no recipient addresses, no provider bodies).
+model NotificationAttempt {
+  id         String   @id @default(cuid())
+  shop       String
+  deliveryId String
+  attemptNo  Int
+  outcome    String   // ACCEPTED | FAILED
+  httpStatus Int?
+  retryable  Boolean?
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([shop, deliveryId])
+  @@index([shop, createdAt])
+}
+
+// A pre-order launch. `state` is the merchant's intent (DRAFT | PUBLISHED | PAUSED); the
+// status shown (Scheduled / Active / Sold Out / Completed ...) is computed from state,
+// dates and the verified sold counts, so no scheduler has to flip it.
+// Its variants are PreorderConfig rows with campaignId set.
+model Campaign {
+  id            String    @id @default(cuid())
+  shop          String
+  name          String
+  state         String    @default("DRAFT")
+  startsAt      DateTime?
+  endsAt        DateTime? // exclusive: the first instant after the campaign
+  shipDate      DateTime?
+  maxQuantity   Int?      // default per-variant limit
+  targetUnits   Int?      // optional goal shown as progress
+  showCountdown Boolean   @default(false)
+  showProgress  Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([shop, state])
+  @@index([shop, startsAt])
+}
+
+// Short-lived hold on pre-order units, taken through the app proxy before the cart add.
+// status: HELD -> CONVERTED (stock went negative: a sale happened) | RELEASED | EXPIRED.
+// PreorderConfig.reservedCount always equals the sum of HELD quantities.
+model PreorderReservation {
+  id         String    @id @default(cuid())
+  shop       String
+  configId   String
+  variantId  String
+  quantity   Int
+  status     String    @default("HELD")
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+  // Set by the single caller that won the HELD -> final transition; gates the give-back.
+  resolveToken String?
+
+  @@index([shop, configId, status])
+  @@index([status, expiresAt])
+}
+
+// Sends already used per sending account (normalised Gmail address) per UTC day. One row per account/day, only changed by
+// atomic conditional updates, so concurrent workers - and several shops sharing one Gmail account - cannot exceed the cap.
+model EmailQuota {
+  account   String
+  day       String   // YYYY-MM-DD (UTC)
+  count     Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@id([account, day])
+}

@@ -1,0 +1,27 @@
+[[extensions]]
+name = "Waitlist signup confirmation"
+type = "flow_trigger"
+handle = "waitlist-signup-confirmation"
+uid = "44f7dbaa-f8cc-0c5e-ff5b-d76d598da50f2ae2c792"
+description = "A customer has just joined a waitlist and should get a confirmation."
+
+[settings]
+
+  [[settings.fields]]
+  type = "customer_reference"
+
+  [[settings.fields]]
+  type = "single_line_text_field"
+  key = "Product title"
+
+  [[settings.fields]]
+  type = "single_line_text_field"
+  key = "Variant title"
+
+  [[settings.fields]]
+  type = "single_line_text_field"
+  key = "Product link"
+
+  [[settings.fields]]
+  type = "single_line_text_field"
+  key = "Store domain"

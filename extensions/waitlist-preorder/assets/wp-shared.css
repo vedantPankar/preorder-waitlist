@@ -1,0 +1,39 @@
+.wp-block { margin: 16px 0; font: inherit; }
+.wp-block[hidden], .wp-button[hidden] { display: none; }
+.wp-button {
+  display: inline-block; width: 100%; padding: var(--wp-pad-y, 12px) 20px; border: var(--wp-border, 1px) solid var(--wp-bg, #1a1a1a);
+  border-radius: var(--wp-radius, 4px); background: var(--wp-bg, #1a1a1a); color: var(--wp-fg, #fff);
+  font: inherit; font-size: var(--wp-font, 16px); font-weight: var(--wp-weight, 600); line-height: 1.3; cursor: pointer; text-align: center;
+}
+.wp-style-outline .wp-button { background: transparent; color: var(--wp-bg, #1a1a1a); }
+.wp-align-left { text-align: left; } .wp-align-center { text-align: center; } .wp-align-right { text-align: right; }
+.wp-width-auto .wp-button, .wp-width-responsive .wp-button { width: auto; min-width: 200px; }
+.wp-width-full .wp-button { width: 100%; }
+.wp-button:hover { filter: brightness(1.1); }
+.wp-button:focus-visible, .wp-input:focus-visible { outline: 3px solid #005bd3; outline-offset: 2px; }
+.wp-button[disabled] { opacity: .6; cursor: not-allowed; }
+.wp-form { display: grid; gap: 8px; margin-top: 12px; text-align: left; }
+.wp-form[hidden] { display: none; }
+.wp-label { font-size: .9em; font-weight: 600; }
+.wp-input { width: 100%; padding: 10px 12px; border: 1px solid #8a8a8a; border-radius: var(--wp-radius, 4px); font: inherit; box-sizing: border-box; }
+.wp-hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.wp-status { margin-top: 8px; font-size: .95em; min-height: 1.2em; }
+.wp-status[data-state="error"] { color: #b42318; }
+.wp-status[data-state="success"] { color: #067647; }
+.wp-note { margin: 8px 0 0; font-size: .9em; }
+.wp-qty { width: 80px; margin-bottom: 8px; }
+@media (max-width: 749px) { .wp-width-responsive .wp-button { width: 100%; } }
+
+.wp-hint { margin: 0; padding: 8px 10px; font-size: .85em; border: 1px dashed currentColor; opacity: .75; }
+.wp-block[data-mode="hint"] > :not(.wp-hint),
+.wp-block[data-mode="closed"] > :not(.wp-closed),
+.wp-block[data-mode="countdown"] > :not(.wp-countdown) { display: none; }
+.wp-countdown { margin: 0 0 8px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.wp-closed { margin: 0; padding: 10px 12px; border: 1px solid currentColor; border-radius: var(--wp-radius, 4px); }
+.wp-progress { margin: 8px 0 0; }
+.wp-progress progress { width: 100%; height: 10px; accent-color: var(--wp-bg, #1a1a1a); }
+.wp-countdown[hidden], .wp-progress[hidden], .wp-closed[hidden], .wp-hint[hidden] { display: none; }
+
+/* Theme purchase buttons, hidden only while an app button replaces them (set by wp-common.js). */
+form[data-wp-hide-native] :is(button[type="submit"], input[type="submit"], [name="add"], .shopify-payment-button, shopify-accelerated-checkout, shopify-buy-it-now-button, .product-form__submit):not(.wp-block *),
+[data-wp-hide-native-scope] > :is(.shopify-payment-button, shopify-accelerated-checkout, shopify-buy-it-now-button) { display: none !important; }

@@ -1,0 +1,27 @@
+[[extensions]]
+name = "Waitlist restock notification"
+type = "flow_trigger"
+handle = "waitlist-restock-notification"
+uid = "55613b22-d2e6-6720-1643-688fd9a04dbdb5bbb4fc"
+description = "A customer on the waitlist should be told that a product is back in stock."
+
+[settings]
+
+  [[settings.fields]]
+  type = "customer_reference"
+
+  [[settings.fields]]
+  type = "single_line_text_field"
+  key = "Product title"
+
+  [[settings.fields]]
+  type = "single_line_text_field"
+  key = "Variant title"
+
+  [[settings.fields]]
+  type = "single_line_text_field"
+  key = "Product link"
+
+  [[settings.fields]]
+  type = "single_line_text_field"
+  key = "Store domain"

@@ -1,0 +1,77 @@
+{%- liquid
+  assign wp_product = product
+  if wp_product == blank
+    assign wp_product = block.settings.product
+  endif
+  assign current = wp_product.selected_or_first_available_variant
+-%}
+{%- if wp_product != blank -%}
+  {{ 'wp-shared.css' | asset_url | stylesheet_tag }}
+  <div
+    class="wp-block wp-waitlist wp-style-{{ block.settings.button_style }} wp-width-{{ block.settings.button_width }} wp-align-{{ block.settings.button_align }}"
+    data-wp-waitlist
+    data-product-id="{{ wp_product.id }}"
+    data-endpoint="/apps/waitlist/signup"
+    data-config-url="/apps/waitlist/config"
+    data-hide-native="{{ block.settings.hide_native_buttons }}"
+    data-customer-email="{{ customer.email | escape }}"
+    data-show-with-preorder="{{ block.settings.show_with_preorder }}"
+    data-initial-variant="{{ current.id }}"
+    data-show-always="{{ block.settings.show_when_available }}"
+    style="--wp-bg: {{ block.settings.button_color }}; --wp-fg: {{ block.settings.text_color }}; --wp-radius: {{ block.settings.corner_radius }}px; --wp-font: {{ block.settings.font_size }}px; --wp-pad-y: {{ block.settings.padding_y }}px; --wp-border: {{ block.settings.border_width }}px; --wp-weight: {{ block.settings.font_weight }};"
+    hidden
+    {{ block.shopify_attributes }}
+  >
+    <script type="application/json" data-wp-variants>
+      [{%- for v in wp_product.variants -%}{"id":{{ v.id }},"available":{{ v.available | json }}}{% unless forloop.last %},{% endunless %}{%- endfor -%}]
+    </script>
+    <button type="button" class="wp-button" data-wp-open aria-expanded="false" aria-controls="wp-form-{{ block.id }}">
+      {{ block.settings.button_text }}
+    </button>
+    <form class="wp-form" id="wp-form-{{ block.id }}" data-wp-form novalidate hidden>
+      <label class="wp-label" for="wp-email-{{ block.id }}">{{ block.settings.email_label }}</label>
+      <input class="wp-input" id="wp-email-{{ block.id }}" name="email" type="email" autocomplete="email" required placeholder="{{ block.settings.email_placeholder }}" aria-describedby="wp-status-{{ block.id }}">
+      <div class="wp-hp" aria-hidden="true"><label>Website <input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+      <button type="submit" class="wp-button" data-wp-submit>{{ block.settings.submit_text }}</button>
+      {%- if block.settings.privacy_note != blank -%}<p class="wp-note">{{ block.settings.privacy_note }}</p>{%- endif -%}
+    </form>
+    <p class="wp-status" id="wp-status-{{ block.id }}" role="status" aria-live="polite" data-wp-status></p>
+    <span data-wp-success hidden>{{ block.settings.success_message | escape }}</span>
+  </div>
+  <script src="{{ 'wp-common.js' | asset_url }}" defer="defer"></script>
+  <script src="{{ 'waitlist.js' | asset_url }}" defer="defer"></script>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Waitlist button",
+  "target": "section",
+  "settings": [
+    { "type": "product", "id": "product", "label": "Product (only used outside product pages)", "info": "On a product page the block always uses that page's product." },
+    { "type": "text", "id": "button_text", "label": "Button text", "default": "Notify Me When Available" },
+    { "type": "text", "id": "submit_text", "label": "Submit button text", "default": "Notify me" },
+    { "type": "text", "id": "email_label", "label": "Email field label", "default": "Email address" },
+    { "type": "text", "id": "email_placeholder", "label": "Email placeholder", "default": "you@example.com" },
+    { "type": "text", "id": "success_message", "label": "Success message", "default": "Thanks! We'll email you when it's back in stock." },
+    { "type": "text", "id": "privacy_note", "label": "Privacy note", "default": "We only use your email to tell you about this product." },
+    { "type": "checkbox", "id": "show_with_preorder", "label": "Also show when Pre-Order is available", "default": false, "info": "By default the waitlist is hidden for variants that can be pre-ordered." },
+    { "type": "checkbox", "id": "show_when_available", "label": "Preview in theme editor when in stock", "default": false },
+    { "type": "checkbox", "id": "hide_native_buttons", "label": "Hide the theme's Add to cart / Buy it now while this button is showing", "default": true, "info": "Only hides them for this product form, and only while this button is visible. Turn off if your theme already hides them." },
+    { "type": "header", "content": "Button style" },
+    { "type": "select", "id": "button_style", "label": "Style", "default": "solid",
+      "options": [ { "value": "solid", "label": "Solid" }, { "value": "outline", "label": "Outline" } ] },
+    { "type": "color", "id": "button_color", "label": "Button color", "default": "#1a1a1a" },
+    { "type": "color", "id": "text_color", "label": "Button text color", "default": "#ffffff", "info": "Solid style only. Outline uses the button color for text and border." },
+    { "type": "select", "id": "button_width", "label": "Width", "default": "responsive",
+      "options": [ { "value": "responsive", "label": "Full width on mobile, fit on desktop" }, { "value": "full", "label": "Always full width" }, { "value": "auto", "label": "Fit to text" } ] },
+    { "type": "select", "id": "button_align", "label": "Alignment", "default": "left",
+      "options": [ { "value": "left", "label": "Left" }, { "value": "center", "label": "Center" }, { "value": "right", "label": "Right" } ] },
+    { "type": "range", "id": "font_size", "label": "Text size", "min": 12, "max": 24, "step": 1, "unit": "px", "default": 16 },
+    { "type": "select", "id": "font_weight", "label": "Text weight", "default": "600",
+      "options": [ { "value": "400", "label": "Regular" }, { "value": "600", "label": "Semibold" }, { "value": "700", "label": "Bold" } ] },
+    { "type": "range", "id": "padding_y", "label": "Vertical padding", "min": 6, "max": 24, "step": 1, "unit": "px", "default": 12 },
+    { "type": "range", "id": "border_width", "label": "Border width", "min": 0, "max": 4, "step": 1, "unit": "px", "default": 1 },
+    { "type": "range", "id": "corner_radius", "label": "Corner radius", "min": 0, "max": 40, "step": 2, "unit": "px", "default": 4 }
+  ]
+}
+{% endschema %}

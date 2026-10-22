@@ -1,0 +1,94 @@
+{%- liquid
+  assign wp_product = product
+  if wp_product == blank
+    assign wp_product = block.settings.product
+  endif
+  assign current = wp_product.selected_or_first_available_variant
+-%}
+{%- if wp_product != blank -%}
+  {{ 'wp-shared.css' | asset_url | stylesheet_tag }}
+  <div
+    class="wp-block wp-preorder wp-style-{{ block.settings.button_style }} wp-width-{{ block.settings.button_width }} wp-align-{{ block.settings.button_align }}"
+    data-wp-preorder
+    data-product-id="{{ wp_product.id }}"
+    data-config-url="/apps/waitlist/config"
+    data-reserve-url="/apps/waitlist/reserve"
+    data-hide-native="{{ block.settings.hide_native_buttons }}"
+    data-initial-variant="{{ current.id }}"
+    data-use-app-style="{{ block.settings.use_app_style }}"
+    data-show-remaining="{{ block.settings.show_remaining }}"
+    data-sold-out-text="{{ block.settings.sold_out_text | escape }}"
+    data-ended-text="{{ block.settings.ended_text | escape }}"
+    data-countdown-start="{{ block.settings.countdown_start_label | escape }}"
+    data-countdown-end="{{ block.settings.countdown_end_label | escape }}"
+    data-after-add="{{ block.settings.after_add }}"
+    data-customer-id="{{ customer.id }}"
+    data-login-url="/account/login"
+    data-login-text="{{ block.settings.login_text | escape }}"
+    data-error-text="{{ block.settings.error_text | escape }}"
+    data-ships-label="{{ block.settings.ships_label | escape }}"
+    style="--wp-bg: {{ block.settings.button_color }}; --wp-fg: {{ block.settings.text_color }}; --wp-radius: {{ block.settings.corner_radius }}px; --wp-font: {{ block.settings.font_size }}px; --wp-pad-y: {{ block.settings.padding_y }}px; --wp-border: {{ block.settings.border_width }}px; --wp-weight: {{ block.settings.font_weight }};"
+    hidden
+    {{ block.shopify_attributes }}
+  >
+    <script type="application/json" data-wp-variants>
+      [{%- for v in wp_product.variants -%}{"id":{{ v.id }},"tracked":{% if v.inventory_management != blank %}true{% else %}false{% endif %},"quantity":{{ v.inventory_quantity | default: 0 }}}{% unless forloop.last %},{% endunless %}{%- endfor -%}]
+    </script>
+    {%- if block.settings.show_quantity -%}
+      <label class="wp-label" for="wp-qty-{{ block.id }}">Quantity</label>
+      <input class="wp-input wp-qty" id="wp-qty-{{ block.id }}" type="number" min="1" value="1" inputmode="numeric" data-wp-qty>
+    {%- endif -%}
+    <button type="button" class="wp-button" data-wp-button>{{ block.settings.fallback_button_text }}</button>
+    <p class="wp-note" data-wp-ships></p>
+    <p class="wp-countdown" data-wp-countdown role="timer" hidden></p>
+    <div class="wp-progress" data-wp-progress hidden>
+      <progress max="1" value="0" aria-label="Pre-order progress"></progress>
+      <p class="wp-note" data-wp-progress-text></p>
+    </div>
+    <p class="wp-closed" data-wp-closed role="status" hidden></p>
+    <p class="wp-hint" data-wp-hint hidden></p>
+    <p class="wp-status" role="status" aria-live="polite" data-wp-status></p>
+  </div>
+  <script src="{{ 'wp-common.js' | asset_url }}" defer="defer"></script>
+  <script src="{{ 'preorder.js' | asset_url }}" defer="defer"></script>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Pre-order button",
+  "target": "section",
+  "settings": [
+    { "type": "product", "id": "product", "label": "Product (only used outside product pages)", "info": "On a product page the block always uses that page's product." },
+    { "type": "paragraph", "content": "Button text and shipping date are set per variant in the app. This text is only a fallback." },
+    { "type": "text", "id": "fallback_button_text", "label": "Fallback button text", "default": "Pre-Order Now" },
+    { "type": "text", "id": "ships_label", "label": "Shipping date label", "default": "Expected to ship" },
+    { "type": "checkbox", "id": "show_remaining", "label": "Show remaining pre-order quantity", "default": true },
+    { "type": "text", "id": "sold_out_text", "label": "Sold-out message", "default": "Sorry, this item is no longer available for pre-order." },
+    { "type": "text", "id": "ended_text", "label": "Campaign-ended message", "default": "This pre-order campaign has ended." },
+    { "type": "text", "id": "countdown_start_label", "label": "Countdown label (before launch)", "default": "Pre-orders open in" },
+    { "type": "text", "id": "countdown_end_label", "label": "Countdown label (before closing)", "default": "Pre-orders close in" },
+    { "type": "checkbox", "id": "show_quantity", "label": "Show quantity field", "default": true },
+    { "type": "select", "id": "after_add", "label": "After adding to cart", "default": "checkout",
+      "options": [ { "value": "checkout", "label": "Go to checkout" }, { "value": "cart", "label": "Go to cart" } ] },
+    { "type": "text", "id": "login_text", "label": "Button text when login is required", "default": "Log in to pre-order", "info": "Shown to logged-out visitors when \"Require customer login for pre-orders\" is on in the app's Settings." },
+    { "type": "text", "id": "error_text", "label": "Error message", "default": "Sorry, we couldn't add this pre-order. Please try again." },
+    { "type": "checkbox", "id": "hide_native_buttons", "label": "Hide the theme's Add to cart / Buy it now while this button is showing", "default": true, "info": "Only hides them for this product form, and only while this button is visible. Turn off if your theme already hides them." },
+    { "type": "header", "content": "Button style" },
+    { "type": "checkbox", "id": "use_app_style", "label": "Use the app's Settings look", "default": true, "info": "When you have saved Storefront display in the app's Settings, its colours, button style and countdown style replace the style settings below." },
+    { "type": "select", "id": "button_style", "label": "Style", "default": "solid",
+      "options": [ { "value": "solid", "label": "Solid" }, { "value": "outline", "label": "Outline" } ] },
+    { "type": "color", "id": "button_color", "label": "Button color", "default": "#1a1a1a" },
+    { "type": "color", "id": "text_color", "label": "Button text color", "default": "#ffffff", "info": "Solid style only. Outline uses the button color for text and border." },
+    { "type": "select", "id": "button_width", "label": "Width", "default": "responsive",
+      "options": [ { "value": "responsive", "label": "Full width on mobile, fit on desktop" }, { "value": "full", "label": "Always full width" }, { "value": "auto", "label": "Fit to text" } ] },
+    { "type": "select", "id": "button_align", "label": "Alignment", "default": "left",
+      "options": [ { "value": "left", "label": "Left" }, { "value": "center", "label": "Center" }, { "value": "right", "label": "Right" } ] },
+    { "type": "range", "id": "font_size", "label": "Text size", "min": 12, "max": 24, "step": 1, "unit": "px", "default": 16 },
+    { "type": "select", "id": "font_weight", "label": "Text weight", "default": "600",
+      "options": [ { "value": "400", "label": "Regular" }, { "value": "600", "label": "Semibold" }, { "value": "700", "label": "Bold" } ] },
+    { "type": "range", "id": "padding_y", "label": "Vertical padding", "min": 6, "max": 24, "step": 1, "unit": "px", "default": 12 },
+    { "type": "range", "id": "border_width", "label": "Border width", "min": 0, "max": 4, "step": 1, "unit": "px", "default": 1 },
+    { "type": "range", "id": "corner_radius", "label": "Corner radius", "min": 0, "max": 40, "step": 2, "unit": "px", "default": 4 }
+  ]
+}
+{% endschema %}
