@@ -41,7 +41,7 @@ export default function Dashboard() {
   const { counts, preorderConfigs, preorderUnits, emailConfigured, emailProblems, lastNotifyError, demand, topProducts, campaigns, series, recent, campaignTotal } = useLoaderData();
   const waiting = counts.ACTIVE + counts.SENDING;
   const steps = [
-    { done: emailConfigured, title: "Configure email provider", sub: "Enable back-in-stock notifications", href: "/app/settings#email-setup" },
+    { done: emailConfigured, title: "Connect Gmail", sub: "Enable back-in-stock notifications", href: "/app/settings#gmail-setup" },
     { done: preorderConfigs > 0, title: "Enable pre-order on products", sub: "Select products or variants", href: "/app/products" },
     { done: campaignTotal > 0, title: "Create your first campaign", sub: "Set schedule, limits and messaging", href: "/app/campaigns/new" },
   ];
@@ -51,8 +51,8 @@ export default function Dashboard() {
     <Shell>
       <PageHead title="Dashboard" subtitle="Overview of your waitlist, pre-orders and customer demand" />
       {!emailConfigured && (
-        <Banner tone="critical" title="Back-in-stock emails are not operational" action={<Button href="/app/settings#email-setup">Configure email provider</Button>}>
-          <span>No email provider is configured, so no notifications are being sent. Customers stay on the waitlist until the email settings are fixed.</span>
+        <Banner tone="critical" title="Back-in-stock emails are not operational" action={<Button href="/app/settings#gmail-setup">Connect Gmail</Button>}>
+          <span>Gmail is not connected, so no notifications are being sent. Customers stay on the waitlist until Gmail is connected.</span>
           <ul>{emailProblems.map((p) => <li key={p}>{p}</li>)}</ul>
         </Banner>
       )}
@@ -106,7 +106,7 @@ export default function Dashboard() {
         <Card title="Quick actions">
           <a className="wp-quick" href="/app/waitlist"><Svg name="send" /> Send pending notifications</a>
           <a className="wp-quick" href="/app/campaigns/new"><Svg name="calendar" /> Create pre-order campaign</a>
-          <a className="wp-quick" href="/app/settings#email-setup"><Svg name="mail" /> Configure email provider</a>
+          <a className="wp-quick" href="/app/settings#gmail-setup"><Svg name="mail" /> Connect Gmail</a>
         </Card>
         <Card title="App setup guide" action={<span className="wp-muted">{doneCount} / {steps.length} completed</span>}>
           <ul className="wp-list">

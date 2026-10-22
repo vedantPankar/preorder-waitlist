@@ -60,7 +60,7 @@ export const action = async ({ request }) => {
   const form = await request.formData();
   const intent = form.get("intent");
   const mailer = await getShopMailer(db, shop, { admin });
-  if (!mailer) return { error: "No working email provider is configured, so nothing can be sent." };
+  if (!mailer) return { error: "Gmail is not connected or needs attention, so nothing can be sent." };
   if (intent === "retry_failed") await retryFailedDeliveries(db, shop);
   else if (intent !== "process") return { error: "Unknown action." };
   const r = await runQueueForShop({ db, shop, admin, mailer });
@@ -69,7 +69,7 @@ export const action = async ({ request }) => {
 
 const KINDS = { RESTOCK: "Back in stock", SIGNUP_CONFIRMATION: "Signup confirmation", SHIP_REMINDER: "Ship-date reminder", SHIP_DATE_CHANGE: "Ship-date change" };
 const TONES = { QUEUED: "info", SENDING: "info", ACCEPTED: "success", FAILED: "critical", SKIPPED: "neutral" };
-const LABELS = { QUEUED: "Queued", SENDING: "Sending", ACCEPTED: "Accepted by provider", FAILED: "Failed", SKIPPED: "Skipped" };
+const LABELS = { QUEUED: "Queued", SENDING: "Sending", ACCEPTED: "Accepted by Gmail", FAILED: "Failed", SKIPPED: "Skipped" };
 
 export default function Notifications() {
   const d = useLoaderData();
@@ -92,9 +92,9 @@ export default function Notifications() {
       <s-button slot="secondary-actions" disabled={busy || !d.mailer.configured || d.metrics.failed === 0} onClick={() => submit("retry_failed")}>Retry failed</s-button>
 
       {!d.mailer.configured && (
-        <s-banner tone="critical" heading="Email is not configured">
+        <s-banner tone="critical" heading="Gmail is not ready">
           <s-unordered-list>{d.mailer.problems.map((p) => <s-list-item key={p}>{p}</s-list-item>)}</s-unordered-list>
-          <s-paragraph>Set these environment variables on the server, then restart. Customers stay on the waitlist until then.</s-paragraph>
+          <s-paragraph>Fix this in Settings → Send with Gmail. Customers stay on the waitlist until then.</s-paragraph>
         </s-banner>
       )}
       {d.mailer.configured && d.lastError === "SEND_FAILURES" && (
@@ -107,15 +107,15 @@ export default function Notifications() {
       <s-section heading={`Last ${d.days} days`}>
         <s-stack direction="inline" gap="large">
           <Metric label="Queued" value={d.metrics.queued} />
-          <Metric label="Accepted by provider" value={d.metrics.accepted} />
+          <Metric label="Accepted by Gmail" value={d.metrics.accepted} />
           <Metric label="Failed" value={d.metrics.failed} />
           <Metric label="Waiting / retrying" value={d.metrics.pending} />
           <Metric label="Link clicks" value={d.metrics.clickTrackingEnabled ? d.metrics.clicked : "Tracking off"} />
           <Metric label="Click rate" value={d.metrics.clickRate == null ? "—" : `${d.metrics.clickRate}%`} />
         </s-stack>
         <s-paragraph>
-          “Accepted” means the email provider took the message; it is not a guarantee of inbox delivery. Delivery confirmations and purchases
-          are not measured: delivery needs provider event webhooks, and order attribution needs order access this app does not request.
+          “Accepted” means Gmail took the message; it is not a guarantee of inbox delivery. Delivery confirmations and purchases
+          are not measured: Gmail does not report delivery or opens, and order attribution needs order access this app does not request.
           Click tracking is opt-in under Settings.
         </s-paragraph>
       </s-section>

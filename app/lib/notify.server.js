@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { escapeHtml, SKIP_NO_CUSTOMER } from "./mailer.server";
+import { escapeHtml } from "./html.server";
 
 export const MAX_ATTEMPTS = 3;
 export const STALE_SENDING_MS = 10 * 60 * 1000;
@@ -24,7 +24,6 @@ export function buildEmail({ shop, variant, settings, delivery }) {
   const tracking = settings?.trackClicks ? " The link in this email counts clicks so the store can see whether notifications are useful." : "";
   return {
     subject,
-    context: { shop, productTitle: variant.productTitle, variantTitle: variant.variantTitle ?? "", productUrl: url },
     text: `Good news! ${name} is back in stock.\n\nGet it here: ${url}\n\nYou received this one-time email because you asked to be notified. We will not email you again about this product unless you sign up again.${tracking}`,
     html: `<p>Good news! <strong>${escapeHtml(name)}</strong> is back in stock.</p><p><a href="${escapeHtml(url)}">View the product</a></p><p style="color:#6d7175;font-size:12px">You received this one-time email because you asked to be notified. We will not email you again about this product unless you sign up again.${escapeHtml(tracking)}</p>`,
   };
@@ -131,8 +130,7 @@ export function countQueued(db, shop, variantId) {
  *
  * - A delivery is claimed with a conditional update (lease), so concurrent workers
  *   and restarts can never send it twice at the same time. A crashed worker's lease
- *   expires and the delivery is picked up again (at-least-once; Resend also gets an
- *   idempotency key).
+ *   expires and the delivery is picked up again (at-least-once).
  * - A delivery is ACCEPTED only after the provider confirmed the send.
  * - Transient failures (network, 429, 5xx) are re-queued with exponential backoff;
  *   permanent ones (other 4xx) and exhausted retries end FAILED for a manual retry.
@@ -188,15 +186,6 @@ export async function processQueue(db, { shop, mailer, stockCheck, variantId, no
         quotaBlocked = true;
         await db.notificationDelivery.updateMany({ where: { id: d.id, shop }, data: { status: "QUEUED", lockedUntil: null, attempts: { decrement: 1 }, nextAttemptAt: error.deferUntil, lastError: String(error.message).slice(0, 200) } });
         return void summary.deferred++;
-      }
-      if (error?.skip) {
-        // Not a Shopify customer: Flow cannot email them. Recorded as skipped (not retryable by the failed-retry button).
-        await db.$transaction([
-          db.notificationAttempt.create({ data: { shop, deliveryId: d.id, attemptNo: delivery.attempts, outcome: "SKIPPED", error: SKIP_NO_CUSTOMER } }),
-          db.notificationDelivery.updateMany({ where: { id: d.id, shop }, data: { status: "SKIPPED", lockedUntil: null, lastError: SKIP_NO_CUSTOMER } }),
-          db.waitlistEntry.updateMany({ where: { id: entry.id, shop }, data: { status: "FAILED", lastError: SKIP_NO_CUSTOMER, attempts: delivery.attempts } }),
-        ]);
-        return void summary.skipped++;
       }
       const retryable = error?.retryable !== false && !(error?.status >= 400 && error.status < 500 && error.status !== 429 && error.status !== 408);
       const exhausted = delivery.attempts >= MAX_ATTEMPTS;

@@ -12,7 +12,7 @@ const dateFromProperty = (li) => {
 
 /**
  * orders/create: remember each pre-order line. Idempotent per (order, line item). Returns how many were stored.
- * `storeEmail`: keep the buyer's address (only when the shop sends its own emails, e.g. Gmail; Flow needs just the customer id).
+ * `storeEmail`: keep the buyer's address (only when the shop sends through Gmail).
  */
 export async function recordPreorderOrder(db, { shop, payload, storeEmail = false }) {
   const orderId = payload?.id != null ? String(payload.id) : null;

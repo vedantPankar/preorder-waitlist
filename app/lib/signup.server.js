@@ -13,7 +13,7 @@ const MESSAGES = {
 /**
  * Handles a public signup request. Returns { status, body } for the route; `confirmationQueued` tells the route it
  * may send the queued signup confirmation now (never part of the JSON body).
- * `canConfirm`: the shop's email channel can send the confirmation (Shopify Flow or its own Gmail).
+ * `canConfirm`: the shop's Gmail can send the confirmation.
  */
 export async function handleSignupRequest({ db, admin, shop, input, canConfirm = false }) {
   // Honeypot: bots fill hidden fields. Pretend success, store nothing.

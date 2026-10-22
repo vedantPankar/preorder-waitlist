@@ -1,10 +1,10 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createTestDb, variant } from "./helpers.mjs";
-import { getMailer, flowPayload, FLOW_TRIGGERS, FLOW_TRIGGER_HANDLE, SKIP_NO_CUSTOMER } from "../app/lib/mailer.server.js";
 import { addSignup } from "../app/lib/waitlist.server.js";
 import { handleSignupRequest } from "../app/lib/signup.server.js";
-import { enqueueSignupConfirmation, enqueueShipEmails, processFlowDeliveries, runFlowKinds, dateKey } from "../app/lib/flow-notify.server.js";
+import { enqueueSignupConfirmation, enqueueShipEmails, processFlowDeliveries, runFlowKinds, dateKey, SKIP_NO_EMAIL } from "../app/lib/flow-notify.server.js";
+import { buildShipEmail, buildSignupConfirmationEmail } from "../app/lib/email-templates.server.js";
 import { processQueue, enqueueRestock, retryFailedDeliveries, MAX_ATTEMPTS } from "../app/lib/notify.server.js";
 import { runQueueForShop, shopsWithDueWork, queueDepth } from "../app/lib/queue-runner.server.js";
 import { recordPreorderOrder, cancelPreorderOrder } from "../app/lib/preorder-orders.server.js";
@@ -12,75 +12,50 @@ import { handleCustomerRedact, handleShopRedact } from "../app/lib/webhooks.serv
 import { parseSettingsForm, settingsView } from "../app/lib/settings.server.js";
 import { isValidEmail, cleanText } from "../app/lib/validation.server.js";
 
+// Signup confirmation and ship-date emails: queueing, windows, retries, isolation from the restock email, privacy.
+// The sender is a recording stand-in for the shop's Gmail mailer (the real SMTP behaviour is tested in gmail.test.mjs).
+
 let db;
 before(async () => { db = await createTestDb(); });
 
-const FLOW_ENV = { EMAIL_PROVIDER: "shopify_flow" };
 let n = 0;
-const newShop = () => `fe${++n}.myshopify.com`;
+const newShop = () => `ee${++n}.myshopify.com`;
 const D = (s) => new Date(`${s}T00:00:00Z`);
 const NOW = new Date("2026-11-10T12:00:00Z");
 
-/** Fake Admin: answers the customer lookup (by email) and the Flow trigger, and records every trigger fired. */
-function flowAdmin({ customers = { "known@x.com": "gid://shopify/Customer/77" }, fail = null, userErrors = [] } = {}) {
-  const triggers = [], lookups = [];
+/** Records every message; `fail` makes every send throw a temporary ("transient") or permanent error. */
+function recorder({ fail = null } = {}) {
+  const sent = [];
   return {
-    triggers, lookups,
-    graphql: async (query, opts) => {
-      const json = async () => {
-        if (query.includes("customers(")) {
-          const email = /email:"([^"]*)"/.exec(opts.variables.query)?.[1];
-          lookups.push(email);
-          return { data: { customers: { nodes: customers[email] ? [{ id: customers[email] }] : [] } } };
-        }
-        if (query.includes("flowTriggerReceive")) {
-          if (fail === "network") throw new Error("boom");
-          if (fail === "api") return { errors: [{ message: "throttled" }] };
-          triggers.push(opts.variables);
-          return { data: { flowTriggerReceive: { userErrors } } };
-        }
-        // variant lookup (fetchVariants)
-        return { data: { nodes: [{ id: "gid://shopify/ProductVariant/111", title: "Red", inventoryQuantity: 0, inventoryPolicy: "DENY", product: { id: "gid://shopify/Product/999", title: "Shoe", handle: "shoe" } }] } };
-      };
-      return { json };
+    channel: "smtp", provider: "gmail", sent,
+    async send(message) {
+      if (fail === "transient") throw Object.assign(new Error("temporary failure"), { retryable: true });
+      if (fail === "permanent") throw Object.assign(new Error("recipient rejected"), { retryable: false });
+      sent.push(message);
+      return { id: `m${sent.length}` };
     },
   };
 }
-const flowMailerFor = (admin) => getMailer(FLOW_ENV, undefined, { admin });
-const deliveries = (shop, where = {}) => db.notificationDelivery.findMany({ where: { shop, ...where }, orderBy: { queuedAt: "asc" } });
-
-// ---- trigger payloads ---------------------------------------------------------------------------------------
-
-test("each kind fires its own trigger with the documented payload", async () => {
-  const ctx = { shop: "s.myshopify.com", productTitle: "Shoe", variantTitle: "Red", productUrl: "https://s.myshopify.com/products/shoe", orderName: "#1001", shipDate: "2026-11-13" };
-  assert.deepEqual(Object.keys(FLOW_TRIGGERS).sort(), ["RESTOCK", "SHIP_DATE_CHANGE", "SHIP_REMINDER", "SIGNUP_CONFIRMATION"]);
-  assert.equal(FLOW_TRIGGERS.RESTOCK, FLOW_TRIGGER_HANDLE);
-  const base = { customer_id: 77, "Product title": "Shoe", "Variant title": "Red", "Product link": ctx.productUrl, "Store domain": "s.myshopify.com" };
-  assert.deepEqual(flowPayload("SIGNUP_CONFIRMATION", 77, ctx), base);
-  assert.deepEqual(flowPayload("SHIP_REMINDER", 77, ctx), { ...base, Reason: "reminder", "Order name": "#1001", "Ship date": "2026-11-13" });
-  assert.deepEqual(flowPayload("SHIP_DATE_CHANGE", 77, ctx), { ...base, Reason: "changed", "Order name": "#1001", "Ship date": "2026-11-13" });
-
-  const admin = flowAdmin();
-  const mailer = flowMailerFor(admin);
-  await mailer.send({ to: "known@x.com", kind: "SIGNUP_CONFIRMATION", context: ctx });
-  await mailer.send({ customerId: "gid://shopify/Customer/77", kind: "SHIP_REMINDER", context: ctx });
-  await mailer.send({ customerId: 77, kind: "SHIP_DATE_CHANGE", context: ctx });
-  assert.deepEqual(admin.triggers.map((t) => t.handle), ["waitlist-signup-confirmation", "preorder-ship-date-update", "preorder-ship-date-update"]);
-  assert.deepEqual(admin.triggers.map((t) => t.payload.Reason), [undefined, "reminder", "changed"]);
-  assert.deepEqual(admin.lookups, ["known@x.com"], "a known customer id needs no lookup");
+/** Fake Admin: answers the variant lookup (product handle "shoe"). */
+const adminStub = () => ({
+  graphql: async () => ({ json: async () => ({ data: { nodes: [{ id: "gid://shopify/ProductVariant/111", title: "Red", inventoryQuantity: 0, inventoryPolicy: "DENY", product: { id: "gid://shopify/Product/999", title: "Shoe", handle: "shoe" } }] } }) }),
 });
+const deliveries = (shop, where = {}) => db.notificationDelivery.findMany({ where: { shop, ...where }, orderBy: { queuedAt: "asc" } });
+const idle = { sent: 0, failed: 0, retried: 0, skipped: 0, deferred: 0 };
 
-test("no Shopify customer is a skip (not a failure) for every kind; unknown kinds are rejected", async () => {
-  const admin = flowAdmin();
-  const mailer = flowMailerFor(admin);
-  for (const kind of ["RESTOCK", "SIGNUP_CONFIRMATION"]) {
-    await assert.rejects(() => mailer.send({ to: "guest@x.com", kind, context: {} }), (e) => e.skip === true && e.retryable === false && /No Shopify customer/.test(e.message));
-  }
-  await assert.rejects(() => mailer.send({ kind: "SHIP_REMINDER", context: {} }), (e) => e.skip === true);
-  assert.equal(admin.triggers.length, 0, "no trigger is fired for a guest");
-  await assert.rejects(() => mailer.send({ customerId: 1, kind: "NOPE", context: {} }), /Unknown email kind/);
-  assert.equal(mailer.channel, "flow");
-  assert.equal(getMailer({ EMAIL_PROVIDER: "resend", EMAIL_API_KEY: "k", EMAIL_FROM: "a@b.com" }).channel, undefined);
+// ---- wording -----------------------------------------------------------------------------------------------------
+
+test("each kind has its own wording, with the product link, the ship date and escaped text", () => {
+  const c = buildSignupConfirmationEmail({ shop: "s.myshopify.com", productTitle: "Shoe <b>", variantTitle: "Red", productHandle: "shoe" });
+  assert.equal(c.subject, "You're on the list for Shoe <b> (Red)");
+  assert.ok(c.html.includes("Shoe &lt;b&gt;") && !c.html.includes("<b>"), "HTML is escaped");
+  assert.match(c.text, /https:\/\/s\.myshopify\.com\/products\/shoe/);
+  const ctx = { shop: "s.myshopify.com", productTitle: "Shoe", variantTitle: "Red", orderName: "#1001", shipDate: "2026-11-13", productHandle: "shoe" };
+  const reminder = buildShipEmail("SHIP_REMINDER", ctx), changed = buildShipEmail("SHIP_DATE_CHANGE", ctx);
+  assert.equal(reminder.subject, "Your pre-order ships soon: Shoe (Red)");
+  assert.equal(changed.subject, "New expected ship date for your pre-order: Shoe (Red)");
+  for (const m of [reminder, changed]) assert.match(m.text, /13 November 2026/);
+  assert.match(reminder.text, /order #1001/);
 });
 
 // ---- settings toggles ---------------------------------------------------------------------------------------
@@ -104,47 +79,46 @@ test("settings: new emails are off by default, 3 days, validated, saved and kept
 
 // ---- signup confirmation ------------------------------------------------------------------------------------
 
-const signupAdmin = flowAdmin({ customers: { "known@x.com": "gid://shopify/Customer/77" } });
 const input = (email = "known@x.com") => ({ email, productId: "999", variantId: "111" });
 
-test("signup confirmation: queued only when the toggle is on AND the channel is Flow; the entry stays waiting", async () => {
+test("signup confirmation: queued only when the toggle is on AND Gmail can send; the entry stays waiting", async () => {
   const shop = newShop();
+  const admin = adminStub();
   // toggle off (no settings row): nothing queued
-  let r = await handleSignupRequest({ db, admin: signupAdmin, shop, input: input("a@x.com"), canConfirm: true });
+  let r = await handleSignupRequest({ db, admin, shop, input: input("a@x.com"), canConfirm: true });
   assert.deepEqual([r.status, r.confirmationQueued], [200, false]);
   await db.shopSettings.create({ data: { shop, emailSignupConfirmation: true } });
-  // toggle on but not the Flow channel (Resend/Postmark): nothing queued
-  r = await handleSignupRequest({ db, admin: signupAdmin, shop, input: input("b@x.com"), canConfirm: false });
+  // toggle on but Gmail cannot send (not connected / needs attention): nothing queued
+  r = await handleSignupRequest({ db, admin, shop, input: input("b@x.com"), canConfirm: false });
   assert.equal(r.confirmationQueued, false);
   assert.equal((await deliveries(shop)).length, 0);
-  // on + Flow: one delivery, JSON body unchanged, entry still ACTIVE
-  r = await handleSignupRequest({ db, admin: signupAdmin, shop, input: input("known@x.com"), canConfirm: true });
+  // on + Gmail: one delivery, JSON body unchanged, entry still ACTIVE
+  r = await handleSignupRequest({ db, admin, shop, input: input("known@x.com"), canConfirm: true });
   assert.deepEqual([r.body, r.confirmationQueued], [{ ok: true, result: "created" }, true]);
   const [d] = await deliveries(shop);
   assert.deepEqual([d.kind, d.status, JSON.parse(d.payload).productTitle], ["SIGNUP_CONFIRMATION", "QUEUED", "Shoe"]);
   assert.ok(!d.payload.includes("@"), "no email address in the payload");
   assert.equal((await db.waitlistEntry.findFirst({ where: { shop, email: "known@x.com" } })).status, "ACTIVE");
   // a duplicate signup does not queue a second confirmation
-  r = await handleSignupRequest({ db, admin: signupAdmin, shop, input: input("known@x.com"), canConfirm: true });
+  r = await handleSignupRequest({ db, admin, shop, input: input("known@x.com"), canConfirm: true });
   assert.deepEqual([r.body.result, r.confirmationQueued], ["duplicate", false]);
   assert.equal((await deliveries(shop)).length, 1);
 });
 
-test("signup confirmation: sent once through Flow, accepted, entry still waiting; concurrent runners cannot double-send", async () => {
+test("signup confirmation: sent once, accepted, entry still waiting; concurrent runners cannot double-send", async () => {
   const shop = newShop();
   await db.shopSettings.create({ data: { shop, emailSignupConfirmation: true } });
-  const admin = flowAdmin();
-  await handleSignupRequest({ db, admin, shop, input: input("known@x.com"), canConfirm: true });
-  const mailer = flowMailerFor(admin);
+  await handleSignupRequest({ db, admin: adminStub(), shop, input: input("known@x.com"), canConfirm: true });
+  const mailer = recorder();
   const runs = await Promise.all([processFlowDeliveries(db, { shop, mailer, now: NOW }), processFlowDeliveries(db, { shop, mailer, now: NOW })]);
   assert.equal(runs.reduce((a, r) => a + r.sent, 0), 1);
-  assert.equal(admin.triggers.length, 1, "exactly one trigger fired");
-  assert.equal(admin.triggers[0].handle, "waitlist-signup-confirmation");
+  assert.equal(mailer.sent.length, 1, "exactly one email sent");
+  assert.deepEqual([mailer.sent[0].to, mailer.sent[0].subject], ["known@x.com", "You're on the list for Shoe (Red)"]);
   const [d] = await deliveries(shop);
   assert.deepEqual([d.status, d.attempts], ["ACCEPTED", 1]);
   assert.equal((await db.notificationAttempt.findMany({ where: { shop, deliveryId: d.id } })).map((a) => a.outcome).join(), "ACCEPTED");
   assert.equal((await db.waitlistEntry.findFirst({ where: { shop } })).status, "ACTIVE");
-  assert.deepEqual(await processFlowDeliveries(db, { shop, mailer, now: NOW }), { sent: 0, failed: 0, retried: 0, skipped: 0, deferred: 0 }, "nothing is sent twice");
+  assert.deepEqual(await processFlowDeliveries(db, { shop, mailer, now: NOW }), idle, "nothing is sent twice");
 });
 
 test("signup confirmation: re-signup after being notified is confirmed again; the same signup never twice", async () => {
@@ -161,29 +135,15 @@ test("signup confirmation: re-signup after being notified is confirmed again; th
   assert.equal((await deliveries(shop)).length, 2);
 });
 
-test("signup confirmation: a guest (no Shopify customer) is skipped and recorded, not failed or retried", async () => {
-  const shop = newShop();
-  await db.shopSettings.create({ data: { shop, emailSignupConfirmation: true } });
-  const admin = flowAdmin();
-  await handleSignupRequest({ db, admin, shop, input: input("guest@x.com"), canConfirm: true });
-  const r = await processFlowDeliveries(db, { shop, mailer: flowMailerFor(admin), now: NOW });
-  assert.deepEqual([r.sent, r.failed, r.skipped], [0, 0, 1]);
-  const [d] = await deliveries(shop);
-  assert.deepEqual([d.status, d.lastError], ["SKIPPED", SKIP_NO_CUSTOMER]);
-  assert.equal(admin.triggers.length, 0);
-  assert.equal((await db.waitlistEntry.findFirst({ where: { shop } })).status, "ACTIVE", "the guest keeps waiting for restock");
-  assert.equal(await retryFailedDeliveries(db, shop), 0, "skipped is not a failure to retry");
-});
-
 test("signup confirmation: an entry removed before sending is skipped", async () => {
   const shop = newShop();
-  const admin = flowAdmin();
   const v = variant();
   const s = await addSignup(db, { shop, email: "known@x.com", variant: v });
   await enqueueSignupConfirmation(db, { shop, entry: s.entry, variant: v });
   await db.waitlistEntry.updateMany({ where: { shop }, data: { status: "REMOVED" } });
-  const r = await processFlowDeliveries(db, { shop, mailer: flowMailerFor(admin), now: NOW });
-  assert.equal(r.skipped, 1); assert.equal(admin.triggers.length, 0);
+  const mailer = recorder();
+  const r = await processFlowDeliveries(db, { shop, mailer, now: NOW });
+  assert.equal(r.skipped, 1); assert.equal(mailer.sent.length, 0);
 });
 
 // ---- retries ----------------------------------------------------------------------------------------------
@@ -193,8 +153,7 @@ test("retries: transient errors back off 1/5/30 min then fail; permanent errors 
   const v = variant();
   const s = await addSignup(db, { shop, email: "known@x.com", variant: v });
   await enqueueSignupConfirmation(db, { shop, entry: s.entry, variant: v });
-  const admin = flowAdmin({ fail: "api" });
-  const mailer = flowMailerFor(admin);
+  const mailer = recorder({ fail: "transient" });
   let t = new Date(NOW);
   const expectBackoff = [60_000, 5 * 60_000, null];
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
@@ -211,17 +170,17 @@ test("retries: transient errors back off 1/5/30 min then fail; permanent errors 
   }
   assert.equal(await retryFailedDeliveries(db, shop, { now: t }), 1);
   assert.equal((await deliveries(shop))[0].status, "QUEUED");
-  const ok = await processFlowDeliveries(db, { shop, mailer: flowMailerFor(flowAdmin()), now: t });
+  const ok = await processFlowDeliveries(db, { shop, mailer: recorder(), now: t });
   assert.equal(ok.sent, 1);
 
   const shop2 = newShop();
   const s2 = await addSignup(db, { shop: shop2, email: "known@x.com", variant: v });
   await enqueueSignupConfirmation(db, { shop: shop2, entry: s2.entry, variant: v });
-  const perm = await processFlowDeliveries(db, { shop: shop2, mailer: flowMailerFor(flowAdmin({ userErrors: [{ message: "Trigger not found" }] })), now: NOW });
+  const perm = await processFlowDeliveries(db, { shop: shop2, mailer: recorder({ fail: "permanent" }), now: NOW });
   assert.deepEqual([perm.failed, (await deliveries(shop2))[0].status], [1, "FAILED"]);
 });
 
-test("nothing is sent (and nothing is lost) unless the channel is Flow", async () => {
+test("nothing is sent (and nothing is lost) unless the sender is the shop's Gmail", async () => {
   const shop = newShop();
   const v = variant();
   const s = await addSignup(db, { shop, email: "known@x.com", variant: v });
@@ -229,6 +188,7 @@ test("nothing is sent (and nothing is lost) unless the channel is Flow", async (
   const sent = [];
   const r = await processFlowDeliveries(db, { shop, mailer: { send: async (m) => sent.push(m) }, now: NOW });
   assert.deepEqual([r.sent, sent.length, (await deliveries(shop))[0].status], [0, 0, "QUEUED"]);
+  assert.deepEqual(await processFlowDeliveries(db, { shop, mailer: null, now: NOW }), idle);
 });
 
 // ---- pre-order lines from orders ---------------------------------------------------------------------------
@@ -242,8 +202,10 @@ const orderPayload = (o = {}) => ({
   ...o,
 });
 const seedConfig = (shop, over = {}) => db.preorderConfig.create({ data: { shop, productId: "999", variantId: "111", productTitle: "Shoe", variantTitle: "Red", shipDate: D("2026-11-13"), ...over } });
+/** Gmail keeps the buyer's address (it needs it for ship-date emails). */
+const record = (shop, payload) => recordPreorderOrder(db, { shop, payload, storeEmail: true });
 
-test("orders: only pre-order lines are stored, with no personal data; webhook retries are idempotent", async () => {
+test("orders: only pre-order lines are stored, and without the address unless Gmail needs it; webhook retries are idempotent", async () => {
   const shop = newShop();
   await seedConfig(shop);
   assert.deepEqual(await recordPreorderOrder(db, { shop, payload: orderPayload() }), { stored: 1 });
@@ -251,7 +213,7 @@ test("orders: only pre-order lines are stored, with no personal data; webhook re
   const rows = await db.preorderOrder.findMany({ where: { shop } });
   assert.equal(rows.length, 1);
   assert.deepEqual([rows[0].customerId, rows[0].variantId, rows[0].quantity, rows[0].orderName, dateKey(rows[0].lastShipDate)], ["77", "111", 2, "#1001", "2026-11-13"]);
-  assert.ok(!JSON.stringify(rows).includes("@"), "no email stored");
+  assert.ok(!JSON.stringify(rows).includes("@"), "no email stored by default");
   assert.deepEqual(await recordPreorderOrder(db, { shop, payload: { id: 9, line_items: [{ id: 1, variant_id: 5, properties: [] }] } }), { stored: 0 });
   assert.deepEqual(await recordPreorderOrder(db, { shop, payload: {} }), { stored: 0 });
   assert.equal((await recordPreorderOrder(db, { shop, payload: orderPayload({ id: 5002, customer: null }) })).stored, 1);
@@ -263,27 +225,29 @@ test("orders: only pre-order lines are stored, with no personal data; webhook re
 const allOn = { emailShipReminder: true, emailShipDateChange: true, emailSignupConfirmation: true, shipReminderDays: 3 };
 const resolveHandles = async () => new Map([["111", "shoe"]]);
 
-test("reminder: queued once, only inside the window, only while the toggle is on, with the documented payload", async () => {
+test("reminder: queued once, only inside the window, only while the toggle is on, sent to the order's address", async () => {
   const shop = newShop();
   await seedConfig(shop);
-  await recordPreorderOrder(db, { shop, payload: orderPayload() });
+  await record(shop, orderPayload());
   const run = (settings, now) => enqueueShipEmails(db, { shop, settings, resolveHandles, now });
   assert.deepEqual(await run(allOn, new Date("2026-11-09T12:00:00Z")), { reminders: 0, changes: 0, skipped: 0 }); // 4 days out
   assert.deepEqual(await run({ ...allOn, emailShipReminder: false }, NOW), { reminders: 0, changes: 0, skipped: 0 }); // toggle off
-  assert.equal((await run(allOn, NOW)).reminders, 1);                // 3 days out (Nov 13 00:00 vs Nov 10 12:00 = 2.5 days)
+  assert.equal((await run(allOn, NOW)).reminders, 1);                // Nov 13 00:00 vs Nov 10 12:00 = 2.5 days
   assert.equal((await run(allOn, new Date("2026-11-11T12:00:00Z"))).reminders, 0, "never twice for the same date");
   assert.equal((await run(allOn, new Date("2026-11-14T00:00:00Z"))).reminders, 0, "no reminder once the date has passed");
   const [d] = await deliveries(shop);
   assert.deepEqual([d.kind, d.status, d.eventId], ["SHIP_REMINDER", "QUEUED", "reminder:2026-11-13"]);
-  const admin = flowAdmin();
-  assert.equal((await processFlowDeliveries(db, { shop, mailer: flowMailerFor(admin), now: NOW })).sent, 1);
-  assert.deepEqual(admin.triggers[0], { handle: "preorder-ship-date-update", payload: { customer_id: 77, "Product title": "Shoe", "Variant title": "Red", "Product link": `https://${shop}/products/shoe`, "Store domain": shop, Reason: "reminder", "Order name": "#1001", "Ship date": "2026-11-13" } });
+  const mailer = recorder();
+  assert.equal((await processFlowDeliveries(db, { shop, mailer, now: NOW })).sent, 1);
+  assert.equal(mailer.sent[0].to, "known@x.com");
+  assert.equal(mailer.sent[0].subject, "Your pre-order ships soon: Shoe (Red)");
+  assert.ok(mailer.sent[0].text.includes(`https://${shop}/products/shoe`) && /13 November 2026/.test(mailer.sent[0].text));
 });
 
 test("reminder: the days setting controls the window", async () => {
   const shop = newShop();
   await seedConfig(shop);
-  await recordPreorderOrder(db, { shop, payload: orderPayload() });
+  await record(shop, orderPayload());
   const at = new Date("2026-11-08T00:00:00Z"); // 5 days out
   assert.equal((await enqueueShipEmails(db, { shop, settings: { ...allOn, shipReminderDays: 3 }, resolveHandles, now: at })).reminders, 0);
   assert.equal((await enqueueShipEmails(db, { shop, settings: { ...allOn, shipReminderDays: 7 }, resolveHandles, now: at })).reminders, 1);
@@ -292,7 +256,7 @@ test("reminder: the days setting controls the window", async () => {
 test("change notice: sent once when the date moves; lastShipDate follows; no stale mail after the toggle is turned on", async () => {
   const shop = newShop();
   await seedConfig(shop);
-  await recordPreorderOrder(db, { shop, payload: orderPayload() });
+  await record(shop, orderPayload());
   const far = new Date("2026-10-01T00:00:00Z");
   assert.equal((await enqueueShipEmails(db, { shop, settings: allOn, resolveHandles, now: far })).changes, 0, "no change yet");
   await db.preorderConfig.updateMany({ where: { shop }, data: { shipDate: D("2026-12-01") } });
@@ -308,16 +272,17 @@ test("change notice: sent once when the date moves; lastShipDate follows; no sta
   // ...so switching it on later does not mail the old change
   assert.equal((await enqueueShipEmails(db, { shop, settings: allOn, resolveHandles, now: far })).changes, 0);
   assert.equal((await deliveries(shop)).length, 1);
-  const admin = flowAdmin();
-  await processFlowDeliveries(db, { shop, mailer: flowMailerFor(admin), now: far });
-  assert.equal(admin.triggers[0].payload.Reason, "changed");
+  const mailer = recorder();
+  await processFlowDeliveries(db, { shop, mailer, now: far });
+  assert.equal(mailer.sent[0].subject, "New expected ship date for your pre-order: Shoe (Red)");
+  assert.match(mailer.sent[0].text, /1 December 2026/);
 });
 
 test("change notice uses a campaign's ship date when the variant has none of its own, and is not followed by a duplicate reminder", async () => {
   const shop = newShop();
   const camp = await db.campaign.create({ data: { shop, name: "Launch", shipDate: D("2026-11-20"), state: "PUBLISHED" } });
   await seedConfig(shop, { shipDate: null, campaignId: camp.id });
-  await recordPreorderOrder(db, { shop, payload: orderPayload({ line_items: [{ id: 1, variant_id: 111, product_id: 999, title: "Shoe", quantity: 1, properties: [{ name: "_preorder", value: "true" }] }] }) });
+  await record(shop, orderPayload({ line_items: [{ id: 1, variant_id: 111, product_id: 999, title: "Shoe", quantity: 1, properties: [{ name: "_preorder", value: "true" }] }] }));
   assert.equal(dateKey((await db.preorderOrder.findFirst({ where: { shop } })).lastShipDate), "2026-11-20", "falls back to the campaign date");
   await db.campaign.update({ where: { id: camp.id }, data: { shipDate: D("2026-11-12") } }); // moved up, now inside the window
   const r = await enqueueShipEmails(db, { shop, settings: allOn, resolveHandles, now: NOW });
@@ -325,19 +290,19 @@ test("change notice uses a campaign's ship date when the variant has none of its
   assert.deepEqual((await deliveries(shop)).map((d) => d.kind), ["SHIP_DATE_CHANGE"]);
 });
 
-test("ship-date emails: guests are recorded as skipped, cancelled orders are left alone", async () => {
+test("ship-date emails: orders without an address are recorded as skipped, cancelled orders are left alone", async () => {
   const shop = newShop();
   await seedConfig(shop);
-  await recordPreorderOrder(db, { shop, payload: orderPayload({ id: 1, customer: null }) });
-  await recordPreorderOrder(db, { shop, payload: orderPayload({ id: 2 }) });
+  await record(shop, orderPayload({ id: 1, customer: null }));
+  await record(shop, orderPayload({ id: 2 }));
   await cancelPreorderOrder(db, { shop, payload: { id: 2 } });
   const r = await enqueueShipEmails(db, { shop, settings: allOn, resolveHandles, now: NOW });
   assert.deepEqual([r.reminders, r.skipped], [0, 1]);
   const [d] = await deliveries(shop);
-  assert.deepEqual([d.status, d.lastError, d.kind], ["SKIPPED", SKIP_NO_CUSTOMER, "SHIP_REMINDER"]);
-  const admin = flowAdmin();
-  assert.deepEqual(await processFlowDeliveries(db, { shop, mailer: flowMailerFor(admin), now: NOW }), { sent: 0, failed: 0, retried: 0, skipped: 0, deferred: 0 });
-  assert.equal(admin.triggers.length, 0);
+  assert.deepEqual([d.status, d.lastError, d.kind], ["SKIPPED", SKIP_NO_EMAIL, "SHIP_REMINDER"]);
+  const mailer = recorder();
+  assert.deepEqual(await processFlowDeliveries(db, { shop, mailer, now: NOW }), idle);
+  assert.equal(mailer.sent.length, 0);
 });
 
 // ---- the queue: isolation from restock, runner, scheduler ------------------------------------------------------
@@ -348,55 +313,42 @@ test("restock and the new kinds share the table but never each other's rows", as
   const v = variant({ inventoryQuantity: 0 });
   const s = await addSignup(db, { shop, email: "known@x.com", variant: v });
   await enqueueSignupConfirmation(db, { shop, entry: s.entry, variant: v });
-  const admin = flowAdmin();
-  const mailer = flowMailerFor(admin);
+  const mailer = recorder();
   // the restock sender ignores the confirmation (the variant is out of stock and must not block it either)
   const restocked = { ...v, inventoryQuantity: 5 };
   assert.equal((await enqueueRestock(db, { shop, variant: restocked, now: NOW })).queued, 1);
   const r = await processQueue(db, { shop, mailer, stockCheck: async () => restocked, now: NOW });
   assert.equal(r.sent, 1);
-  assert.deepEqual(admin.triggers.map((t) => t.handle), [FLOW_TRIGGER_HANDLE], "only the restock email went out");
+  assert.deepEqual(mailer.sent.map((m) => /back in stock/.test(m.subject)), [true], "only the restock email went out");
   assert.deepEqual((await deliveries(shop)).map((d) => [d.kind, d.status]), [["SIGNUP_CONFIRMATION", "QUEUED"], ["RESTOCK", "ACCEPTED"]]);
-  // the flow processor sends the confirmation, and leaves the (now NOTIFIED) entry alone
+  // the extra-email processor sends the confirmation, and leaves the (now NOTIFIED) entry alone
   assert.equal((await processFlowDeliveries(db, { shop, mailer, now: NOW })).sent, 1);
+  assert.match(mailer.sent[1].subject, /on the list/);
   assert.equal((await db.waitlistEntry.findFirst({ where: { shop } })).status, "NOTIFIED");
-});
-
-test("restock: a waiting guest is skipped (not failed) and shown as skipped: no Shopify customer", async () => {
-  const shop = newShop();
-  const v = variant({ inventoryQuantity: 0 });
-  await addSignup(db, { shop, email: "guest@x.com", variant: v });
-  const restocked = { ...v, inventoryQuantity: 5 };
-  await enqueueRestock(db, { shop, variant: restocked, now: NOW });
-  const admin = flowAdmin();
-  const r = await processQueue(db, { shop, mailer: flowMailerFor(admin), stockCheck: async () => restocked, now: NOW });
-  assert.deepEqual([r.sent, r.failed, r.skipped], [0, 0, 1]);
-  const [d] = await deliveries(shop);
-  assert.deepEqual([d.status, d.lastError], ["SKIPPED", SKIP_NO_CUSTOMER]);
-  assert.equal(admin.triggers.length, 0);
 });
 
 test("runner: one pass queues ship-date emails and sends them; the scheduler sees shops with open pre-orders", async () => {
   const shop = newShop();
   await db.shopSettings.create({ data: { shop, ...allOn } });
   await seedConfig(shop);
-  await recordPreorderOrder(db, { shop, payload: orderPayload() });
+  await record(shop, orderPayload());
   assert.ok((await shopsWithDueWork(db, NOW)).includes(shop), "a shop with open pre-orders is visited");
-  const admin = flowAdmin();
-  const r = await runQueueForShop({ db, shop, admin, mailer: flowMailerFor(admin), now: NOW });
+  const admin = adminStub();
+  const mailer = recorder();
+  const r = await runQueueForShop({ db, shop, admin, mailer, now: NOW });
   assert.equal(r.sent, 1);
-  assert.equal(admin.triggers.length, 1);
-  assert.equal(admin.triggers[0].payload["Product link"], `https://${shop}/products/shoe`);
-  assert.equal((await runQueueForShop({ db, shop, admin, mailer: flowMailerFor(admin), now: NOW })).sent, 0, "a second pass sends nothing");
-  assert.equal(admin.triggers.length, 1);
+  assert.equal(mailer.sent.length, 1);
+  assert.ok(mailer.sent[0].text.includes(`https://${shop}/products/shoe`));
+  assert.equal((await runQueueForShop({ db, shop, admin, mailer, now: NOW })).sent, 0, "a second pass sends nothing");
+  assert.equal(mailer.sent.length, 1);
   assert.equal(await queueDepth(db, shop), 0);
-  // not the Flow channel: nothing queued, nothing sent
+  // not Gmail: nothing queued, nothing sent
   const shop2 = newShop();
   await db.shopSettings.create({ data: { shop: shop2, ...allOn } });
   await seedConfig(shop2);
-  await recordPreorderOrder(db, { shop: shop2, payload: orderPayload() });
+  await record(shop2, orderPayload());
   const sent = [];
-  assert.deepEqual(await runFlowKinds(db, { shop: shop2, admin, mailer: { send: async (m) => sent.push(m) }, now: NOW }), { sent: 0, failed: 0, retried: 0, skipped: 0, deferred: 0 });
+  assert.deepEqual(await runFlowKinds(db, { shop: shop2, admin, mailer: { send: async (m) => sent.push(m) }, now: NOW }), idle);
   assert.equal((await deliveries(shop2)).length, 0);
 });
 
@@ -406,8 +358,8 @@ test("privacy: customers/redact removes the customer's pre-order lines and their
   const shop = newShop(), other = newShop();
   for (const s of [shop, other]) {
     await seedConfig(s);
-    await recordPreorderOrder(db, { shop: s, payload: orderPayload({ id: 1 }) });
-    await recordPreorderOrder(db, { shop: s, payload: orderPayload({ id: 2, customer: { id: 88 } }) });
+    await record(s, orderPayload({ id: 1 }));
+    await record(s, orderPayload({ id: 2, customer: { id: 88 } }));
     await enqueueShipEmails(db, { shop: s, settings: allOn, resolveHandles, now: NOW });
   }
   assert.equal((await deliveries(shop)).length, 2);

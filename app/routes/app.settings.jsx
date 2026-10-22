@@ -30,7 +30,6 @@ export const action = async ({ request }) => {
   if (intent === "testEmail") {
     const to = cleanText(form.get("testTo"), 254);
     if (!to || !isValidEmail(to)) return { errors: { testTo: "Enter the email address to send the test to." } };
-    if ((await getEmailStatus(db, shop)).channel === "flow") return { errors: { testTo: "Test emails are not available with Shopify Flow. Run your workflow's own test from Shopify Flow instead." } };
     const mailer = await getShopMailer(db, shop, { admin });
     if (!mailer) return { errors: { testTo: "Email sending is not configured yet (or Gmail needs attention, see above)." } };
     const current = await db.shopSettings.findUnique({ where: { shop } });
@@ -42,14 +41,14 @@ export const action = async ({ request }) => {
         fromName: current?.fromName || undefined, replyTo: current?.replyToEmail || undefined,
       });
     } catch (e) {
-      return { errors: { testTo: `The email provider did not accept the test (${e?.status ? `HTTP ${e.status}` : "could not be reached"}).` } };
+      return { errors: { testTo: `Gmail did not accept the test (${e?.status ? `HTTP ${e.status}` : "could not be reached"}).` } };
     }
     return { ok: true, message: "Test email accepted by the provider. Check that inbox." };
   }
 
   if (intent === "disconnectGmail") {
     await db.shopSettings.updateMany({ where: { shop }, data: { gmailAddress: null, gmailPasswordEnc: null, gmailAuthError: null, gmailAuthErrorAt: null } });
-    return { ok: true, message: "Gmail disconnected. Emails use the server's email provider again, if one is configured." };
+    return { ok: true, message: "Gmail disconnected. Nothing is sent until you connect Gmail again." };
   }
 
   const current = await db.shopSettings.findUnique({ where: { shop } });
@@ -118,10 +117,10 @@ export default function Settings() {
           <Card>
             <SectionTitle icon="mail" title="Email notifications" sub="Send automatic emails to customers when products are back in stock." />
             {mailer.configured ? (
-              <Banner tone="success" title="Email provider is configured">Back-in-stock notifications can be sent ({mailer.provider}). Use “Test email notification” on the right to confirm.</Banner>
+              <Banner tone="success" title="Gmail is connected">Back-in-stock notifications are sent through your Gmail. Use “Test email notification” on the right to confirm.</Banner>
             ) : (
-              <Banner tone="critical" title={mailer.gmail.state === "auth_failed" || mailer.gmail.state === "unreadable" ? "Gmail needs attention" : "Email sending is not configured"} action={<Button href={mailer.gmail.state === "none" ? "#gmail-setup" : "#gmail-setup"}>{mailer.gmail.state === "none" ? "Set it up" : "Fix it"}</Button>}>
-                {mailer.gmail.state === "none" ? "No notifications are sent until it is set up. Connect Gmail below, or use a server email provider (see the guide further down)." : mailer.problems[0]}
+              <Banner tone="critical" title={mailer.gmail.state === "auth_failed" || mailer.gmail.state === "unreadable" ? "Gmail needs attention" : "Email sending is not configured"} action={<Button href="#gmail-setup">{mailer.gmail.state === "none" ? "Set it up" : "Fix it"}</Button>}>
+                {mailer.gmail.state === "none" ? "No notifications are sent until Gmail is connected. Connect Gmail below." : mailer.problems[0]}
               </Banner>
             )}
             {lastError && <Banner tone="warning" title="The last send failed">{lastError}</Banner>}
@@ -141,7 +140,7 @@ export default function Settings() {
             <SettingRow title="Gmail address" help="The account that sends the emails, e.g. store@gmail.com or you@yourdomain.com on Google Workspace."><s-email-field name="gmailAddress" label="Gmail address" labelAccessibilityVisibility="exclusive" defaultValue={settings.gmailAddress} error={errors.gmailAddress} /></SettingRow>
             <SettingRow title="App password" help={settings.gmailConfigured ? "A password is saved and is never shown again. Enter a new one only to replace it." : "16 letters from myaccount.google.com/apppasswords. Needs 2-Step Verification on the Google account. Your normal Gmail password will not work."}><s-password-field name="gmailPassword" label="App password" labelAccessibilityVisibility="exclusive" autocomplete="off" placeholder={settings.gmailConfigured ? "Saved (hidden)" : "abcd efgh ijkl mnop"} error={errors.gmailPassword} /></SettingRow>
             <SettingRow title="Daily send limit" help={`Stops sending after this many emails per day from this Gmail account (shared if several stores use the same account). Gmail allows about 500 a day on a personal account and 2,000 on Google Workspace. Default ${400}.`}><s-number-field name="dailySendCap" label="Daily send limit" labelAccessibilityVisibility="exclusive" defaultValue={String(settings.dailySendCap)} min={1} max={2000} error={errors.dailySendCap} /></SettingRow>
-            {settings.gmailConfigured && <p style={{ marginTop: 10 }}><Button danger onClick={() => { if (window.confirm("Disconnect Gmail? The saved app password is deleted and emails use the server's email provider again, if one is set.")) side.submit({ intent: "disconnectGmail" }, { method: "POST" }); }}>Disconnect Gmail</Button></p>}
+            {settings.gmailConfigured && <p style={{ marginTop: 10 }}><Button danger onClick={() => { if (window.confirm("Disconnect Gmail? The saved app password is deleted and nothing is sent until you connect Gmail again.")) side.submit({ intent: "disconnectGmail" }, { method: "POST" }); }}>Disconnect Gmail</Button></p>}
             <ol className="wp-steps" style={{ marginTop: 12 }}>
               <li>Turn on <strong>2-Step Verification</strong> for the Google account.</li>
               <li>Open <strong>myaccount.google.com/apppasswords</strong>, create an app password (name it “Waitlist”) and copy the 16 letters.</li>
@@ -151,49 +150,13 @@ export default function Settings() {
           </Card>
 
           <Card>
-            <SectionTitle icon="mail" tone="blue" title="Extra emails" sub="Signup confirmation and pre-order ship-date emails. With Gmail they are sent by the app; with Shopify Flow each one needs its own Flow workflow (see OPERATIONS.md)." />
-            {mailer.channel !== "flow" && mailer.channel !== "smtp" && <Banner tone="warning" title="These emails need Gmail or Shopify Flow">Connect Gmail above, or set EMAIL_PROVIDER to shopify_flow. With Resend or Postmark nothing is queued or sent for these.</Banner>}
-            {mailer.channel === "smtp" ? <Banner tone="info" title="Sent from your Gmail">These emails are sent by the app through your Gmail account, so guests receive them too. Ship-date emails also need the order permission (see OPERATIONS.md).</Banner> : <Banner tone="info" title="Only existing Shopify customers are emailed">With Shopify Flow, if an email address or an order has no Shopify customer, nothing is sent. It is listed as “skipped: no Shopify customer” in Notification activity. Guest email addresses will not receive these emails. Connect Gmail above to email guests.</Banner>}
-            <SettingRow title="Waitlist signup confirmation" help="Trigger “Waitlist signup confirmation”. Sent right after someone joins a waitlist."><s-switch name="emailSignupConfirmation" label="Send a confirmation when someone joins the waitlist" labelAccessibilityVisibility="exclusive" defaultChecked={settings.emailSignupConfirmation} /></SettingRow>
-            <SettingRow title="Ship-date reminder" help="Trigger “Pre-order ship date update” (Reason = reminder). Sent to customers with an open pre-order shortly before the expected ship date."><s-switch name="emailShipReminder" label="Remind pre-order customers before the ship date" labelAccessibilityVisibility="exclusive" defaultChecked={settings.emailShipReminder} /></SettingRow>
+            <SectionTitle icon="mail" tone="blue" title="Extra emails" sub="Signup confirmation and pre-order ship-date emails, sent by the app through your Gmail." />
+            {mailer.channel !== "smtp" && <Banner tone="warning" title="These emails need Gmail">Connect Gmail above. Until then nothing is queued or sent for these.</Banner>}
+            {mailer.channel === "smtp" && <Banner tone="info" title="Sent from your Gmail">These emails are sent by the app through your Gmail account, so guests receive them too. Ship-date emails also need the order permission (see OPERATIONS.md).</Banner>}
+            <SettingRow title="Waitlist signup confirmation" help="Sent right after someone joins a waitlist."><s-switch name="emailSignupConfirmation" label="Send a confirmation when someone joins the waitlist" labelAccessibilityVisibility="exclusive" defaultChecked={settings.emailSignupConfirmation} /></SettingRow>
+            <SettingRow title="Ship-date reminder" help="Sent to customers with an open pre-order shortly before the expected ship date."><s-switch name="emailShipReminder" label="Remind pre-order customers before the ship date" labelAccessibilityVisibility="exclusive" defaultChecked={settings.emailShipReminder} /></SettingRow>
             <SettingRow title="Days before shipping" help="How many days ahead the reminder is sent (1-60)."><s-number-field name="shipReminderDays" label="Days before shipping" labelAccessibilityVisibility="exclusive" defaultValue={String(settings.shipReminderDays)} min={1} max={60} error={errors.shipReminderDays} /></SettingRow>
-            <SettingRow title="Ship-date change notice" help="Same trigger (Reason = changed). Sent when the expected ship date of an open pre-order changes."><s-switch name="emailShipDateChange" label="Tell pre-order customers when the ship date changes" labelAccessibilityVisibility="exclusive" defaultChecked={settings.emailShipDateChange} /></SettingRow>
-          </Card>
-
-          <Card className="wp-setup">
-            <div id="email-setup" />
-            <SectionTitle icon="send" tone="blue" title="Set up your email provider" sub="Restock emails are sent through Resend or Postmark. Your keys stay on the server and are never shown here." />
-            <ul className="wp-list" aria-label="Setup checklist">
-              {[["EMAIL_PROVIDER", "Provider (resend or postmark)"], ["EMAIL_API_KEY", "API key"], ["EMAIL_FROM", "Verified sender address"]].map(([k, label]) => (
-                <li key={k}>
-                  <span className={`wp-check ${mailer.vars[k] ? "done" : ""}`} aria-hidden="true">{mailer.vars[k] && <Svg name="check" />}</span>
-                  <div className="grow"><strong>{label}</strong><div className="wp-muted">{k}</div></div>
-                  <Badge tone={mailer.vars[k] ? "success" : "warn"}>{mailer.vars[k] ? "Set" : "Missing"}</Badge>
-                </li>
-              ))}
-            </ul>
-            {mailer.channel === "flow" && (
-              <ol className="wp-steps" style={{ marginTop: 12 }}>
-                <li>Open <strong>Shopify Flow</strong> in your Shopify admin and create a workflow.</li>
-                <li>Choose the trigger <strong>Waitlist restock notification</strong> (from this app).</li>
-                <li>Add the action <strong>Send marketing email</strong> (Shopify Email) and write your message. Use the trigger&apos;s product title and product link fields.</li>
-                <li>Turn the workflow on. Each waiting customer then triggers one email from your store&apos;s own sender.</li>
-              </ol>
-            )}
-            {mailer.channel === "flow" && <p className="wp-muted" style={{ marginTop: 10 }}>Only people who already exist as Shopify customers can be emailed this way. Shopify Email also respects each customer&apos;s email marketing consent. Anyone else is shown as skipped (“no Shopify customer”) in Notification activity. The status “accepted” means Shopify Flow received the trigger, not that an email was delivered.</p>}
-            {!mailer.configured && (
-              <ol className="wp-steps" style={{ marginTop: 12 }}>
-                <li>Or, to send from your store&apos;s own sender through Shopify, set <code>EMAIL_PROVIDER=shopify_flow</code> in <code>.env</code> and skip the steps below.</li>
-                <li>Create an account at <a href="https://resend.com" target="_blank" rel="noreferrer">resend.com</a> or <a href="https://postmarkapp.com" target="_blank" rel="noreferrer">postmarkapp.com</a>.</li>
-                <li>Verify the domain or sender address you want emails to come from.</li>
-                <li>Create an API key (Resend: API Keys; Postmark: Server API token).</li>
-                <li>Add these lines to the <code>.env</code> file in your app folder (use your own values):
-                  <code className="wp-code" style={{ marginTop: 6 }}>{"EMAIL_PROVIDER=resend\nEMAIL_API_KEY=your-api-key\nEMAIL_FROM=Your Store <orders@yourdomain.com>"}</code>
-                </li>
-                <li>Stop and restart <code>shopify app dev</code>, reload this page, then send a test email to an inbox you own.</li>
-              </ol>
-            )}
-            <p className="wp-muted" style={{ marginTop: 10 }}>On a hosted app, set the same three variables in your hosting provider&apos;s environment settings instead of a <code>.env</code> file. See OPERATIONS.md.</p>
+            <SettingRow title="Ship-date change notice" help="Sent when the expected ship date of an open pre-order changes."><s-switch name="emailShipDateChange" label="Tell pre-order customers when the ship date changes" labelAccessibilityVisibility="exclusive" defaultChecked={settings.emailShipDateChange} /></SettingRow>
           </Card>
 
           <Card>
@@ -249,7 +212,7 @@ export default function Settings() {
         <aside className="wp-aside">
           <Card title="App status" action={<Badge tone={mailer.configured ? "success" : "warn"}>{mailer.configured ? "Active" : "Needs setup"}</Badge>}>
             <p className="wp-muted">Version {version}</p>
-            <p style={{ marginTop: 6 }}>{mailer.configured ? "Your app is working correctly." : "Emails will not be sent until the email provider is configured."}</p>
+            <p style={{ marginTop: 6 }}>{mailer.configured ? "Your app is working correctly." : "Emails will not be sent until Gmail is connected."}</p>
           </Card>
 
           <Card title="Quick actions">

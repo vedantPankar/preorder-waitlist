@@ -12,7 +12,6 @@ import { handleSignupRequest } from "../app/lib/signup.server.js";
 import { enqueueSignupConfirmation, enqueueShipEmails, processFlowDeliveries, SKIP_NO_EMAIL } from "../app/lib/flow-notify.server.js";
 import { recordPreorderOrder } from "../app/lib/preorder-orders.server.js";
 import { handleCustomerRedact } from "../app/lib/webhooks.server.js";
-import { SKIP_NO_CUSTOMER } from "../app/lib/mailer.server.js";
 import { isValidEmail, cleanText } from "../app/lib/validation.server.js";
 
 process.env.SHOPIFY_API_SECRET ||= "test-api-secret-0123456789";
@@ -150,24 +149,23 @@ test("settings form: the daily cap and the address are validated; defaults are 4
 
 // ---- channel precedence ------------------------------------------------------------------------------------------
 
-test("channel precedence: shop Gmail > environment; unusable Gmail sends nothing instead of switching sender", async () => {
+test("sender: only the shop's Gmail; no Gmail or an unusable Gmail sends nothing", async () => {
   const t = fakeTransport();
-  const flowEnv = { ...ENV, EMAIL_PROVIDER: "shopify_flow" };
-  const admin = { graphql: async () => ({ json: async () => ({}) }) };
   const none = newShop();
-  assert.equal(await getShopMailer(db, none, { env: ENV, transportFactory: t.factory }), null, "no Gmail, no env: nothing");
-  assert.equal((await getShopMailer(db, none, { env: flowEnv, admin, transportFactory: t.factory })).channel, "flow", "no Gmail: the environment sender");
+  assert.equal(await getShopMailer(db, none, { env: ENV, transportFactory: t.factory }), null, "no Gmail: nothing is sent");
+  const noneStatus = await getEmailStatus(db, none, { env: ENV });
+  assert.deepEqual([noneStatus.configured, noneStatus.channel, noneStatus.gmail.state, noneStatus.problems.length], [false, null, "none", 1]);
   const ok = newShop(); await connect(ok);
-  const m = await getShopMailer(db, ok, { env: flowEnv, admin, transportFactory: t.factory });
-  assert.deepEqual([m.provider, m.channel], ["gmail", "smtp"], "Gmail wins over the environment");
+  const m = await getShopMailer(db, ok, { env: ENV, transportFactory: t.factory });
+  assert.deepEqual([m.provider, m.channel], ["gmail", "smtp"]);
   const bad = newShop(); await connect(bad, { extra: { gmailAuthError: AUTH_FLAG } });
-  assert.equal(await getShopMailer(db, bad, { env: flowEnv, admin, transportFactory: t.factory }), null, "sign-in rejected: not the environment sender either");
+  assert.equal(await getShopMailer(db, bad, { env: ENV, transportFactory: t.factory }), null, "sign-in rejected: nothing is sent");
   const rotated = newShop(); await connect(rotated);
-  assert.equal(await getShopMailer(db, rotated, { env: { ...flowEnv, SHOPIFY_API_SECRET: "rotated-secret-value-1" }, admin }), null, "undecryptable password: nothing is sent");
+  assert.equal(await getShopMailer(db, rotated, { env: { ...ENV, SHOPIFY_API_SECRET: "rotated-secret-value-1" } }), null, "undecryptable password: nothing is sent");
   assert.equal((await getEmailStatus(db, rotated, { env: { SHOPIFY_API_SECRET: "rotated-secret-value-1" } })).gmail.state, "unreadable");
   assert.equal(gmailState({ gmailAddress: "a@b.co", gmailPasswordEnc: null }, { shop: "x" }).state, "none", "an address without a password is not configured");
   await db.shopSettings.update({ where: { shop: ok }, data: { gmailAddress: null, gmailPasswordEnc: null } });
-  assert.equal((await getShopMailer(db, ok, { env: flowEnv, admin, transportFactory: t.factory })).channel, "flow", "after disconnecting, the environment again");
+  assert.equal(await getShopMailer(db, ok, { env: ENV, transportFactory: t.factory }), null, "after disconnecting: nothing is sent");
   assert.equal(await anyGmailShop(db), true);
 });
 
@@ -209,7 +207,7 @@ test("guests: the signup confirmation is sent to a guest through Gmail, the entr
   assert.equal((await processFlowDeliveries(db, { shop, mailer, now: NOON })).sent, 0);
 });
 
-test("ship-date emails through Gmail: sent to the order's address; an order without an address is skipped; Flow still needs a customer", async () => {
+test("ship-date emails through Gmail: sent to the order's address; an order without an address is skipped", async () => {
   const shop = newShop(); await connect(shop, { extra: { emailShipReminder: true, shipReminderDays: 3 } });
   await db.preorderConfig.create({ data: { shop, productId: "999", variantId: "111", productTitle: "Shoe", variantTitle: "Red", shipDate: D("2026-11-13") } });
   const order = (id, over) => ({ id, name: `#${id}`, email: `Buyer${id}@Example.com`, customer: null, line_items: [{ id: 1, variant_id: 111, product_id: 999, title: "Shoe", variant_title: "Red", quantity: 1, properties: [{ name: "_preorder", value: "true" }] }], ...over });
@@ -218,7 +216,7 @@ test("ship-date emails through Gmail: sent to the order's address; an order with
   assert.equal((await db.preorderOrder.findFirst({ where: { shop, orderId: "1" } })).email, "buyer1@example.com");
   assert.equal((await db.preorderOrder.findFirst({ where: { shop, orderId: "2" } })).email, null, "the address is only kept when the shop sends its own emails");
   const settings = await db.shopSettings.findUnique({ where: { shop } });
-  const r = await enqueueShipEmails(db, { shop, settings, now: NOON, direct: true });
+  const r = await enqueueShipEmails(db, { shop, settings, now: NOON });
   assert.deepEqual([r.reminders, r.skipped], [1, 1]);
   assert.deepEqual((await deliveries(shop)).map((d) => [d.status, d.lastError]).sort(), [["QUEUED", null], ["SKIPPED", SKIP_NO_EMAIL]]);
   const t = fakeTransport();
@@ -226,13 +224,6 @@ test("ship-date emails through Gmail: sent to the order's address; an order with
   assert.equal(t.calls[0].to, "buyer1@example.com");
   assert.equal(t.calls[0].subject, "Your pre-order ships soon: Shoe (Red)");
   assert.match(t.calls[0].text, /13 November 2026/);
-  // with Flow the same guest order (customer id only) is skipped as before
-  const flow = newShop();
-  await db.preorderConfig.create({ data: { shop: flow, productId: "999", variantId: "111", productTitle: "Shoe", shipDate: D("2026-11-13") } });
-  await recordPreorderOrder(db, { shop: flow, payload: order(3) });
-  const fr = await enqueueShipEmails(db, { shop: flow, settings: { emailShipReminder: true, shipReminderDays: 3 }, now: NOON, direct: false });
-  assert.equal(fr.skipped, 1);
-  assert.equal((await deliveries(flow))[0].lastError, SKIP_NO_CUSTOMER);
   // privacy: redaction by the buyer's address removes the stored line
   await handleCustomerRedact({ db, shop, payload: { customer: { email: "Buyer1@Example.com" } } });
   assert.equal(await db.preorderOrder.count({ where: { shop, orderId: "1" } }), 0);

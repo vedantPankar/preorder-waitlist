@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { createTestDb, fakeAdmin, fakeMailer, variant } from "./helpers.mjs";
 import { addSignup } from "../app/lib/waitlist.server.js";
 import { buildEmail, enqueueRestock, notificationMetrics, notifyVariant, processQueue, recordClick, retryFailedDeliveries } from "../app/lib/notify.server.js";
-import { getMailer, getMailerStatus, parseSender } from "../app/lib/mailer.server.js";
 import { handleCustomerRedact, handleInventoryLevelUpdate, handleShopRedact } from "../app/lib/webhooks.server.js";
 import { runQueueForShop, shopsWithDueWork } from "../app/lib/queue-runner.server.js";
 
@@ -244,34 +243,6 @@ test("privacy: customer redact removes the customer's deliveries and attempts; s
   assert.equal(await db.notificationAttempt.count({ where: { shop } }), 1);
   await handleShopRedact({ db, shop });
   for (const t of ["notificationDelivery", "notificationAttempt", "restockEvent", "waitlistEntry"]) assert.equal(await db[t].count({ where: { shop } }), 0, t);
-});
-
-test("email configuration: actionable errors, sender validation, no secret in messages", () => {
-  assert.deepEqual(getMailerStatus({}).problems.length, 3);
-  const bad = getMailerStatus({ EMAIL_PROVIDER: "sendgrid", EMAIL_API_KEY: "SECRET-KEY", EMAIL_FROM: "nope" });
-  assert.equal(bad.configured, false);
-  assert.ok(bad.problems.some((p) => /not supported/.test(p)) && bad.problems.some((p) => /EMAIL_FROM is not a valid/.test(p)));
-  assert.ok(!JSON.stringify(bad).includes("SECRET-KEY"));
-  assert.equal(getMailerStatus({ EMAIL_PROVIDER: "resend", EMAIL_API_KEY: "k", EMAIL_FROM: "Shop <a@b.com>" }).configured, true);
-  assert.equal(parseSender("Shop <a@b.com>"), "a@b.com"); assert.equal(parseSender("a@b"), null);
-  assert.equal(getMailer({ EMAIL_PROVIDER: "resend", EMAIL_API_KEY: "k" }), null);
-});
-
-test("provider adapters: idempotency key, message id, retryable classification, no recipient in errors", async () => {
-  const seen = [];
-  const mk = (status, body = { id: "re_123" }) => async (url, init) => { seen.push({ url, init }); return { ok: status < 300, status, json: async () => body }; };
-  const env = { EMAIL_PROVIDER: "resend", EMAIL_API_KEY: "k", EMAIL_FROM: "a@b.com" };
-  const ok = await getMailer(env, mk(200)).send({ to: "c@d.com", subject: "s", html: "h", text: "t", idempotencyKey: "delivery-1" });
-  assert.deepEqual(ok, { id: "re_123" });
-  assert.equal(seen[0].init.headers["Idempotency-Key"], "delivery-1");
-  const pm = await getMailer({ ...env, EMAIL_PROVIDER: "postmark" }, mk(200, { MessageID: "pm-9" })).send({ to: "c@d.com", subject: "s", html: "h", text: "t" });
-  assert.equal(pm.id, "pm-9");
-  for (const [status, retryable] of [[429, true], [503, true], [422, false], [401, false]]) {
-    const err = await getMailer(env, mk(status)).send({ to: "secret@d.com", subject: "s", html: "h", text: "t" }).catch((e) => e);
-    assert.equal(err.status, status); assert.equal(err.retryable, retryable); assert.ok(!err.message.includes("secret@d.com"));
-  }
-  const net = await getMailer(env, async () => { throw new Error("ECONNRESET secret@d.com"); }).send({ to: "secret@d.com", subject: "s", html: "h", text: "t" }).catch((e) => e);
-  assert.equal(net.retryable, true); assert.ok(!net.message.includes("secret@d.com"));
 });
 
 test("stress: three simultaneous runs per restock never send the same customer twice (60 rounds)", async () => {

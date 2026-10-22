@@ -155,7 +155,7 @@ export default function Demand() {
             {d.notify.queued === 0 ? <p className="wp-muted">No restock emails were queued in this period, so there are no results to show.</p> : (
               <>
                 <div className="wp-pills">
-                  <Badge>Queued {d.notify.queued}</Badge><Badge tone="success">Accepted by provider {d.notify.accepted}</Badge>
+                  <Badge>Queued {d.notify.queued}</Badge><Badge tone="success">Accepted by Gmail {d.notify.accepted}</Badge>
                   <Badge tone={d.notify.failed ? "critical" : ""}>Failed {d.notify.failed}</Badge>
                   <Badge>{d.notify.clickTrackingEnabled ? `Link clicks ${d.notify.clicked}` : "Click tracking off"}</Badge>
                 </div>

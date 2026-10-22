@@ -12,7 +12,7 @@ export async function runQueueForShop({ db, shop, admin, mailer, now = new Date(
   const total = { sent: 0, failed: 0, retried: 0, skipped: 0, deferred: 0, waitingForStock: 0, queued: 0, remaining: 0, operational: Boolean(mailer) };
   if (!mailer) return total;
   const deadline = Date.now() + budgetMs;
-  // Signup confirmations and ship-date emails (Flow only; a no-op for other providers).
+  // Signup confirmations and ship-date emails (sent through Gmail).
   const flow = await runFlowKinds(db, { shop, admin, mailer, now, budgetMs: Math.max(1, budgetMs / 2) });
   for (const k of ["sent", "failed", "retried", "skipped", "deferred"]) total[k] += flow[k];
   const [waiting, queued] = await Promise.all([

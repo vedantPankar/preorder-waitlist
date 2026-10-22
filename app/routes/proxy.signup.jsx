@@ -22,11 +22,11 @@ export const action = async ({ request }) => {
   } catch {
     return json({ ok: false, error: "bad_request", message: "Invalid request." }, 400);
   }
-  // The confirmation can go out through Shopify Flow or the shop's own Gmail (not Resend/Postmark).
+  // The confirmation goes out through the shop's own Gmail.
   const status_ = await getEmailStatus(db, session.shop);
-  const canConfirm = status_.configured && (status_.channel === "flow" || status_.channel === "smtp");
+  const canConfirm = status_.configured;
   const { status, body, confirmationQueued } = await handleSignupRequest({ db, admin, shop: session.shop, input, canConfirm });
-  // Send the queued confirmation after answering: the visitor never waits for Shopify Flow. If this is lost
+  // Send the queued confirmation after answering: the visitor never waits for the email to send. If this is lost
   // (process exit) the queue runner / scheduler sends it later.
   if (confirmationQueued) setImmediate(async () => processFlowDeliveries(db, { shop: session.shop, mailer: await getShopMailer(db, session.shop, { admin }), budgetMs: 8000 }).catch((e) => console.error("Signup confirmation failed:", e?.message)));
   return json(body, status);

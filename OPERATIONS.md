@@ -7,17 +7,14 @@ it; the README covers the template itself.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `EMAIL_PROVIDER` | for restock emails | `resend`, `postmark`, or `shopify_flow` (hands each email to a Shopify Flow workflow; needs the `read_customers` scope and the restock-trigger extension; only existing Shopify customers can be emailed) |
-| `EMAIL_API_KEY` | for restock emails | Provider API key. Server-side only. |
-| `EMAIL_FROM` | for restock emails | Sender address verified with the provider (`a@b.com` or `Name <a@b.com>`) |
 | `NOTIFY_BATCH_SIZE` | optional | Deliveries claimed per batch (1-1000, default 100) |
 | `NOTIFY_WORKER_INTERVAL_MS` | optional | `>=5000` starts an in-process loop that drains the queue and applies campaign start/end. Single-instance hosts only. |
 | `EMAIL_SETTINGS_KEY` | optional | Encryption key for the Gmail app password saved in Settings (falls back to `SHOPIFY_API_SECRET`). Rotating it makes saved passwords unreadable until re-entered. |
 | `CRON_SECRET` | optional | `>=16` chars. Enables `POST /api/notifications/run` for an external scheduler. Disabled (404) when unset. |
 
-The Settings and Notification activity pages show exactly which email variables are missing
-or invalid (never the key itself). Nothing is sent, and no waitlist entry is marked
-notified, until a working provider is configured.
+Email is sent **only through Gmail**, connected per store in Settings > Send with Gmail (see "Sending with Gmail"
+below); there are no email environment variables to set. Nothing is sent, and no waitlist entry is marked notified,
+until Gmail is connected and working.
 
 ## How restock notifications run
 
@@ -26,11 +23,10 @@ notified, until a working provider is configured.
    (`NotificationDelivery`, one row per customer per restock event, unique so a restock can
    never email the same person twice).
 2. Deliveries are sent in batches. A claim is a conditional update with a lease; a worker
-   that dies mid-send loses its lease and the delivery is retried (at-least-once; Resend also
-   receives an idempotency key).
+   that dies mid-send loses its lease and the delivery is retried (at-least-once).
 3. Transient failures (network, 408, 429, 5xx) are retried with 1 min / 5 min / 30 min backoff;
    other 4xx and exhausted retries end as `FAILED` and can be retried from Notification activity.
-4. A delivery becomes `ACCEPTED` only after the provider accepted it. That is not proof of
+4. A delivery becomes `ACCEPTED` only after Gmail accepted it. That is not proof of
    inbox delivery, opens or purchases, and the app never claims otherwise.
 5. If the webhook's time budget runs out, the rest continues in the background, via the
    "Process queue now" / "Send pending notifications" buttons, the optional worker, or the
@@ -124,10 +120,10 @@ ship-date reminders and change notices. Because the app sends them itself, **gue
 no Shopify customer is needed. The wording is fixed (the subject of the back-in-stock email is editable in Settings).
 "Accepted" means Gmail took the message, not that it reached the inbox.
 
-**Which sender is used:** (1) the shop's Gmail, if configured; otherwise (2) the server's `EMAIL_PROVIDER`
-(Resend, Postmark or Shopify Flow). If Gmail is configured but unusable (sign-in rejected, or the saved password can no
-longer be decrypted) **nothing is sent** and nothing is lost; the app does not quietly switch to another sender. Disconnect
-Gmail in Settings to go back to the server's provider.
+**Which sender is used:** the shop's Gmail, and nothing else. If Gmail is not connected, or is configured but unusable
+(sign-in rejected, or the saved password can no longer be decrypted), **nothing is sent** and nothing is lost: waiting
+customers stay on the waitlist and queued emails stay queued. Settings, the Dashboard and Notification activity say what
+to fix. Disconnecting Gmail in Settings stops all sending until it is connected again.
 
 **Where the password lives:** encrypted in the database (AES-256-GCM, a fresh random IV per value, the shop domain bound in
 so it cannot be copied between shops). The key is **never** stored in the database: it is derived from `EMAIL_SETTINGS_KEY`
@@ -167,67 +163,26 @@ reports "daily limit exceeded", the app marks the day as used and waits.
 **Not verified here:** the tests use a fake SMTP transport. A real send through Gmail has not been tried; do that with the
 test button on your account before relying on it.
 
-## Shopify Flow emails
+## Extra emails (signup confirmation and ship-date emails)
 
-These emails go out through Shopify Flow, like the back-in-stock email, so they need
-`EMAIL_PROVIDER=shopify_flow`. With Resend/Postmark nothing is queued for them (Settings says so). Each
-has its own toggle in **Settings > Shopify Flow emails** (all off by default). Only people who already
-exist as **Shopify customers** can be emailed. Anyone else is listed in Notification activity as
-`skipped: no Shopify customer` (this also applies to back-in-stock emails now, where it used to show as
-failed). Guest email addresses do not receive these emails.
+Besides the back-in-stock email, the app can send three more, each with its own toggle in **Settings > Extra emails**
+(all off by default). They go out through the shop's Gmail like every other email, so guests and any address receive them.
 
-| Email | Flow trigger (from this app) | Fires |
-|---|---|---|
-| Back in stock | Waitlist restock notification | on restock (existing) |
-| Waitlist signup confirmation | Waitlist signup confirmation | right after someone joins a waitlist |
-| Ship-date reminder | Pre-order ship date update, `Reason` = `reminder` | N days before the expected ship date (Settings, default 3), once per ship date |
-| Ship-date change | Pre-order ship date update, `Reason` = `changed` | when the expected ship date of an open pre-order changes, once per change |
-| Pre-order confirmation | none: Shopify's **Order created** trigger | Shopify, when an order is placed |
+| Email | Fires |
+|---|---|
+| Waitlist signup confirmation | right after someone joins a waitlist |
+| Ship-date reminder | N days before the expected ship date (Settings, default 3), once per ship date |
+| Ship-date change | when the expected ship date of an open pre-order changes, once per change |
 
-Trigger fields: every trigger has the customer plus `Product title`, `Variant title`, `Product link`,
-`Store domain`. The ship-date trigger adds `Reason` (`reminder` or `changed`), `Order name` and
-`Ship date` (YYYY-MM-DD).
-
-### Workflows to create in Shopify Flow (one per email)
-
-1. **Signup confirmation:** Trigger *Waitlist signup confirmation* > action *Send marketing email*
-   (Shopify Email). Say they are on the list; link with `Product link`.
-2. **Ship-date reminder:** Trigger *Pre-order ship date update* > Condition `Reason` equals `reminder` >
-   *Send marketing email* using `Ship date`, `Order name`, `Product title`.
-3. **Ship-date change:** same trigger > Condition `Reason` equals `changed` > *Send marketing email*
-   telling them the new `Ship date`.
-4. **Pre-order confirmation (no app code):** Trigger *Order created* > Condition: an order line item has the
-   property `_preorder` = `true` (or filter by a product tag you use for pre-order products) > *Send marketing
-   email*. The cart line also carries `Expected shipping` for display. Shopify's normal order confirmation
-   is sent regardless.
-
-Shopify Email respects each customer's email marketing consent, so customers who did not consent get no
-marketing email even when Flow accepted the trigger. Use Shopify's transactional notification templates
-instead if you need an email that ignores consent.
-
-### How it is checked, and what is not
-
-Automated tests cover the trigger payloads, queue, retries, duplicate prevention, guest skipping, the
-Settings toggles, the order webhooks and privacy deletion, against a mocked Shopify. **The Flow workflows and
-Shopify Email sending themselves have not been verified** and cannot be from tests. Check on the development
-store before relying on them:
-
-1. Deploy to the dev store (`shopify app deploy` / `shopify app dev`), approve the new `read_orders` scope,
-   and set `EMAIL_PROVIDER=shopify_flow`. The new Flow triggers appear in Flow once the extensions are deployed.
-2. Create the four workflows above. Turn the toggles on in Settings.
-3. Signup: join the waitlist of a sold-out variant with the email of an **existing customer**. Expect a Flow run
-   for *Waitlist signup confirmation* and the email. Then join with an email that is **not** a customer:
-   Notification activity shows `skipped: no Shopify customer`.
-4. Pre-order: place a pre-order as an existing customer. Expect the *Order created* workflow and a new row
-   after `orders/create` (check Notification activity later for the reminder).
-5. Reminder: set the variant's ship date to within the reminder window (or raise "Days before shipping"),
-   press **Process queue now** in Notification activity or call the scheduler endpoint. Expect one
-   *Pre-order ship date update* run with `Reason = reminder`.
-6. Change: edit the variant's (or campaign's) ship date, run the queue again. Expect `Reason = changed`, once.
-7. Confirm in the Flow run history that each trigger received the fields above.
-
+Ship-date emails go to the address on the pre-order's order, which the app keeps only while Gmail is connected (it needs
+the order webhooks). An order with no address is listed in Notification activity as `skipped: no email address`.
 Reminders and change notices are only sent while the app is running its queue: use the in-process worker
 (`NOTIFY_WORKER_INTERVAL_MS`) or the scheduler endpoint (`CRON_SECRET`); a webhook alone does not trigger them.
+
+**How it is checked:** automated tests cover the queue, retries, duplicate prevention, the Settings toggles, the order
+webhooks and privacy deletion against a fake SMTP transport. Check on the development store before relying on it:
+join a waitlist and expect the confirmation; place a pre-order, bring its ship date inside the reminder window and press
+**Process queue now** for the reminder; edit the ship date and run the queue again for the change notice.
 
 ## Privacy
 

@@ -1,8 +1,8 @@
-// Shopify Flow emails other than back-in-stock: waitlist signup confirmation, pre-order ship-date reminder and
-// ship-date change notice. They ride the same NotificationDelivery table, lease/retry rules and Notification
-// activity page as restock emails, distinguished by `kind`. See docs/superpowers/specs/2026-10-22-flow-emails-design.md.
+// Emails other than back-in-stock, sent through the shop's Gmail: waitlist signup confirmation, pre-order
+// ship-date reminder and ship-date change notice. They ride the same NotificationDelivery table, lease/retry rules
+// and Notification activity page as restock emails, distinguished by `kind`.
+// (The file keeps its historical name; it no longer has anything to do with Shopify Flow.)
 import { randomBytes } from "node:crypto";
-import { SKIP_NO_CUSTOMER } from "./mailer.server";
 import { buildShipEmail, buildSignupConfirmationEmail } from "./email-templates.server";
 import { MAX_ATTEMPTS, backoffMs } from "./notify.server";
 import { effectiveShipDate } from "./campaign.server";
@@ -21,9 +21,8 @@ const dueWhere = (shop, now) => ({
   OR: [{ status: "QUEUED", nextAttemptAt: { lte: now } }, { status: "SENDING", lockedUntil: { lt: now } }],
 });
 
-/** The new emails go out through Shopify Flow (a trigger) or the shop's own Gmail (a real email). Not Resend/Postmark. */
-export const newKindsEnabled = (mailer) => mailer?.channel === "flow" || mailer?.channel === "smtp";
-export const flowEnabled = newKindsEnabled; // kept for callers that predate Gmail sending
+/** These emails are only sent through the shop's own Gmail. */
+export const newKindsEnabled = (mailer) => mailer?.channel === "smtp";
 
 /** Queues the confirmation for a new (or renewed) waitlist signup. Idempotent per signup. */
 export async function enqueueSignupConfirmation(db, { shop, entry, variant, now = new Date() }) {
@@ -44,13 +43,13 @@ export async function enqueueSignupConfirmation(db, { shop, entry, variant, now 
 
 export const SKIP_NO_EMAIL = "skipped: no email address";
 
-/** `direct`: the channel sends a real email (Gmail), which needs the order's address; Flow needs a Shopify customer. */
-function shipDelivery({ shop, kind, order, ship, handle, now, direct = false }) {
-  const guest = direct ? !order.email : !order.customerId;
+/** Gmail sends a real email, so it needs the order's address; an order without one is recorded as skipped. */
+function shipDelivery({ shop, kind, order, ship, handle, now }) {
+  const guest = !order.email;
   return {
     shop, kind, eventId: `${kind === "SHIP_REMINDER" ? "reminder" : "change"}:${dateKey(ship)}`, entryId: order.id, variantId: order.variantId,
     trackingToken: newToken(), nextAttemptAt: now, queuedAt: now,
-    status: guest ? "SKIPPED" : "QUEUED", lastError: guest ? (direct ? SKIP_NO_EMAIL : SKIP_NO_CUSTOMER) : null,
+    status: guest ? "SKIPPED" : "QUEUED", lastError: guest ? SKIP_NO_EMAIL : null,
     payload: JSON.stringify({ customerId: order.customerId ?? null, productTitle: order.productTitle, variantTitle: order.variantTitle ?? "", orderName: order.orderName ?? "", shipDate: dateKey(ship), productHandle: handle ?? "" }),
   };
 }
@@ -62,7 +61,7 @@ function shipDelivery({ shop, kind, order, ship, handle, now, direct = false }) 
  *  - SHIP_REMINDER when shipping is at most `shipReminderDays` away (and not yet past).
  * `resolveHandles(variantIds)` -> Map(variantId -> product handle), only called when something is about to be queued.
  */
-export async function enqueueShipEmails(db, { shop, settings, resolveHandles = async () => new Map(), now = new Date(), direct = false }) {
+export async function enqueueShipEmails(db, { shop, settings, resolveHandles = async () => new Map(), now = new Date() }) {
   const out = { reminders: 0, changes: 0, skipped: 0 };
   const wantChange = settings?.emailShipDateChange === true, wantReminder = settings?.emailShipReminder === true;
   const days = Number.isInteger(settings?.shipReminderDays) ? settings.shipReminderDays : 3;
@@ -87,10 +86,10 @@ export async function enqueueShipEmails(db, { shop, settings, resolveHandles = a
       if (wantChange) {
         try {
           await db.$transaction([
-            db.notificationDelivery.create({ data: shipDelivery({ shop, kind: "SHIP_DATE_CHANGE", order, ship, handle: await handleFor(order.variantId), now, direct }) }),
+            db.notificationDelivery.create({ data: shipDelivery({ shop, kind: "SHIP_DATE_CHANGE", order, ship, handle: await handleFor(order.variantId), now }) }),
             db.preorderOrder.updateMany({ where: { id: order.id, shop }, data: { lastShipDate: ship } }),
           ]);
-          out[(direct ? order.email : order.customerId) ? "changes" : "skipped"]++;
+          out[order.email ? "changes" : "skipped"]++;
         } catch (e) {
           if (!isUnique(e)) throw e;
           await db.preorderOrder.updateMany({ where: { id: order.id, shop }, data: { lastShipDate: ship } });
@@ -101,8 +100,8 @@ export async function enqueueShipEmails(db, { shop, settings, resolveHandles = a
     // A change notice for this very date already told them; do not follow it with a reminder in the same breath.
     if (await db.notificationDelivery.findFirst({ where: { shop, entryId: order.id, eventId: `change:${dateKey(told)}` }, select: { id: true } })) continue;
     try {
-      await db.notificationDelivery.create({ data: shipDelivery({ shop, kind: "SHIP_REMINDER", order, ship, handle: await handleFor(order.variantId), now, direct }) });
-      out[(direct ? order.email : order.customerId) ? "reminders" : "skipped"]++;
+      await db.notificationDelivery.create({ data: shipDelivery({ shop, kind: "SHIP_REMINDER", order, ship, handle: await handleFor(order.variantId), now }) });
+      out[order.email ? "reminders" : "skipped"]++;
     } catch (e) {
       if (!isUnique(e)) throw e;
     }
@@ -110,15 +109,12 @@ export async function enqueueShipEmails(db, { shop, settings, resolveHandles = a
   return out;
 }
 
-const productUrl = (shop, handle) => `https://${shop}${handle ? `/products/${encodeURIComponent(handle)}` : ""}`;
-
 /** Sends due deliveries of the new kinds. Same claim/lease/retry rules as restock emails. Never touches waitlist entries. */
 export async function processFlowDeliveries(db, { shop, mailer, now = new Date(), budgetMs = 4000, batch = 100 }) {
   const summary = { sent: 0, failed: 0, retried: 0, skipped: 0, deferred: 0 };
   if (!newKindsEnabled(mailer)) return summary;
   const deadline = Date.now() + budgetMs;
-  const direct = mailer.channel === "smtp";
-  const settings = direct ? await db.shopSettings.findUnique({ where: { shop } }) : null;
+  const settings = await db.shopSettings.findUnique({ where: { shop } });
   let quotaBlocked = false; // the sending account's daily limit is used up: leave the rest queued
 
   const finish = (d, delivery, data, outcome, extra = {}) => db.$transaction([
@@ -137,7 +133,7 @@ export async function processFlowDeliveries(db, { shop, mailer, now = new Date()
     let p = {};
     try { p = JSON.parse(delivery.payload || "{}"); } catch { /* treated as empty */ }
     let to = null;
-    if (direct && delivery.kind !== "SIGNUP_CONFIRMATION") {
+    if (delivery.kind !== "SIGNUP_CONFIRMATION") {
       const order = await db.preorderOrder.findFirst({ where: { id: delivery.entryId, shop }, select: { email: true, status: true } });
       if (!order?.email || order.status !== "OPEN") {
         await finish(d, delivery, { status: "SKIPPED", lastError: order?.email ? "order_no_longer_open" : SKIP_NO_EMAIL }, "SKIPPED");
@@ -153,12 +149,9 @@ export async function processFlowDeliveries(db, { shop, mailer, now = new Date()
       }
       to = entry.email;
     }
-    const context = { shop, productTitle: p.productTitle, variantTitle: p.variantTitle, productUrl: productUrl(shop, p.productHandle), orderName: p.orderName, shipDate: p.shipDate };
     try {
-      if (direct) {
-        const body = delivery.kind === "SIGNUP_CONFIRMATION" ? buildSignupConfirmationEmail({ shop, ...p }) : buildShipEmail(delivery.kind, { shop, ...p });
-        await mailer.send({ to, ...body, fromName: settings?.fromName || undefined, replyTo: settings?.replyToEmail || undefined, idempotencyKey: delivery.id });
-      } else await mailer.send({ to, customerId: p.customerId, kind: delivery.kind, context });
+      const body = delivery.kind === "SIGNUP_CONFIRMATION" ? buildSignupConfirmationEmail({ shop, ...p }) : buildShipEmail(delivery.kind, { shop, ...p });
+      await mailer.send({ to, ...body, fromName: settings?.fromName || undefined, replyTo: settings?.replyToEmail || undefined, idempotencyKey: delivery.id });
       await finish(d, delivery, { status: "ACCEPTED", acceptedAt: new Date(), lastError: null }, "ACCEPTED");
       summary.sent++;
     } catch (error) {
@@ -167,10 +160,6 @@ export async function processFlowDeliveries(db, { shop, mailer, now = new Date()
         quotaBlocked = true;
         await db.notificationDelivery.updateMany({ where: { id: d.id, shop }, data: { status: "QUEUED", lockedUntil: null, attempts: { decrement: 1 }, nextAttemptAt: error.deferUntil, lastError: String(error.message).slice(0, 200) } });
         return void summary.deferred++;
-      }
-      if (error?.skip) {
-        await finish(d, delivery, { status: "SKIPPED", lastError: SKIP_NO_CUSTOMER }, "SKIPPED", { error: SKIP_NO_CUSTOMER });
-        return void summary.skipped++;
       }
       const retryable = error?.retryable !== false;
       const message = String(error?.message ?? "send_failed").slice(0, 200);
@@ -198,6 +187,6 @@ export async function runFlowKinds(db, { shop, admin, mailer, now = new Date(), 
   if (!newKindsEnabled(mailer)) return empty;
   const settings = await db.shopSettings.findUnique({ where: { shop } });
   const resolveHandles = async (ids) => new Map((await fetchVariants(admin, ids)).map((v) => [v.variantId, v.productHandle]));
-  await enqueueShipEmails(db, { shop, settings, resolveHandles, now, direct: mailer.channel === "smtp" });
+  await enqueueShipEmails(db, { shop, settings, resolveHandles, now });
   return processFlowDeliveries(db, { shop, mailer, now, budgetMs });
 }

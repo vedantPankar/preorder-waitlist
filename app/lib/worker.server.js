@@ -5,7 +5,6 @@
 // claimed with conditional updates, so two runners never send the same email.
 import db from "../db.server";
 import { unauthenticated } from "../shopify.server";
-import { getMailerStatus } from "./mailer.server";
 import { anyGmailShop, getShopMailer } from "./shop-mailer.server";
 import { runQueueForShop, shopsWithDueWork } from "./queue-runner.server";
 import { reconcileShop } from "./campaign.server";
@@ -18,7 +17,7 @@ import { reconcileShop } from "./campaign.server";
 export async function runAllShops({ now = new Date(), only = null, budgetMs = 20_000, getAdmin = (shop) => unauthenticated.admin(shop).then((r) => r.admin), mailer = undefined } = {}) {
   const deadline = Date.now() + budgetMs;
   const shops = [];
-  const canEmail = Boolean(mailer) || getMailerStatus().configured || (await anyGmailShop(db));
+  const canEmail = Boolean(mailer) || (await anyGmailShop(db));
   const emailShops = canEmail ? await shopsWithDueWork(db, now) : [];
   const campaignShops = (await db.preorderConfig.groupBy({ by: ["shop"], where: { campaignId: { not: null } } })).map((g) => g.shop);
   for (const shop of [...new Set([...emailShops, ...campaignShops])].filter((x) => !only || x === only)) {

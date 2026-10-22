@@ -45,7 +45,7 @@ export const action = async ({ request }) => {
   const form = await request.formData();
   if (form.get("intent") === "send_pending") {
     const mailer = await getShopMailer(db, session.shop, { admin });
-    if (!mailer) return { error: "No email provider is configured, so nothing can be sent." };
+    if (!mailer) return { error: "Gmail is not connected, so nothing can be sent." };
     const r = await resumePending({ db, shop: session.shop, admin, mailer });
     return { ok: true, intent: "send_pending", count: r.sent, remaining: r.remaining, failed: r.failed };
   }
@@ -110,7 +110,7 @@ export default function Waitlist() {
   return (
     <Shell>
       <PageHead title="Waitlist" subtitle="Manage customers waiting for products to be back in stock">{sendButton}</PageHead>
-      {!mailerOk && <Banner tone="warning" title="Email provider is not configured" action={<Button href="/app/settings#email-setup">Configure email provider</Button>}>Pending notifications cannot be sent until it is set up.</Banner>}
+      {!mailerOk && <Banner tone="warning" title="Gmail is not connected" action={<Button href="/app/settings#gmail-setup">Connect Gmail</Button>}>Pending notifications cannot be sent until Gmail is connected.</Banner>}
       {fetcher.data?.error && <Banner tone="critical">{fetcher.data.error}</Banner>}
 
       <div className="wp-stats">

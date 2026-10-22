@@ -29,7 +29,7 @@ const check = (name, ok, detail = "") => { results.push({ name, ok }); console.l
 const db = new PrismaClient();
 const server = spawn("node_modules/.bin/react-router-serve", ["build/server/index.js"], {
   env: { ...process.env, PORT, NODE_ENV: "production", SHOPIFY_API_KEY: KEY, SHOPIFY_API_SECRET: SECRET, SHOPIFY_APP_URL: BASE,
-    SCOPES: "read_inventory,write_products", EMAIL_PROVIDER: "resend", EMAIL_API_KEY: "mock", EMAIL_FROM: "shop@example.com", CRON_SECRET: "e2e-cron-secret-0123456789",
+    SCOPES: "read_inventory,write_products", CRON_SECRET: "e2e-cron-secret-0123456789",
     E2E_STATE: STATE, E2E_LOG: LOG, NODE_OPTIONS: `--import ${new URL("./mock-shopify.mjs", import.meta.url).pathname}` },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -88,7 +88,9 @@ try {
   const stored = await db.waitlistEntry.findFirst({ where: { shop: SHOP, email: "alice@example.com" } });
   check("signup: row linked to correct shop/product/variant", stored?.productId === "999" && stored?.variantId === "111" && stored?.shop === SHOP, JSON.stringify(stored));
 
-  // ---- restock notification
+  // ---- restock notification (sent through the shop's Gmail; the SMTP transport is mocked in the server process)
+  const gmailData = { gmailAddress: "store@gmail.com", gmailPasswordEnc: encryptSecret("abcdefghijklmnop", { shop: SHOP, env: { SHOPIFY_API_SECRET: SECRET } }), dailySendCap: 400, gmailAuthError: null };
+  await db.shopSettings.upsert({ where: { shop: SHOP }, create: { shop: SHOP, ...gmailData }, update: gmailData });
   setQty(111, 5);
   r = await webhook("inventory_levels/update", { inventory_item_id: 5001, location_id: 1, available: 5 }, { id: "evt-restock-1" });
   check("restock webhook accepted (200)", r.status === 200, String(r.status));
@@ -226,28 +228,30 @@ try {
   await admin(SHOP, `/app/campaigns/${camp.id}.data`, { intent: "delete" });
   check("campaign: deleting restores the variant's original policy and removes its config", (await db.preorderConfig.count({ where: { shop: SHOP, variantId: "222" } })) === 0 && logs().filter((l) => l.kind === "policy").at(-1).policy === "DENY");
 
-  // ---- orders webhooks (ship-date emails) and the Flow-email settings
+  // ---- orders webhooks (ship-date emails) and the extra-email settings
   const orderBody = (id, customer) => ({ id, name: `#${id}`, customer, line_items: [{ id: id * 10, variant_id: 222, product_id: 999, title: "Shoe", variant_title: "Blue", quantity: 1, properties: [{ name: "_preorder", value: "true" }, { name: "_preorder_ship_date", value: "2026-12-24" }] }] });
   check("orders: bad HMAC -> 401", (await webhook("orders/create", orderBody(7001, { id: 4242 }), { id: "ord-bad", secretBody: "AAAA" })).status === 401);
-  check("orders: orders/create stores the pre-order line with the customer id only", (await webhook("orders/create", orderBody(7001, { id: 4242, email: "buyer@example.com" }), { id: "ord-1" })).status === 200
+  check("orders: orders/create stores the pre-order line with the customer id and, because Gmail sends the ship-date emails, the buyer's address", (await webhook("orders/create", orderBody(7001, { id: 4242, email: "buyer@example.com" }), { id: "ord-1" })).status === 200
     && (await db.preorderOrder.findMany({ where: { shop: SHOP, orderId: "7001" } })).length === 1
     && (await db.preorderOrder.findFirst({ where: { shop: SHOP, orderId: "7001" } })).customerId === "4242"
-    && !JSON.stringify(await db.preorderOrder.findMany({ where: { shop: SHOP } })).includes("buyer@example.com"));
+    && (await db.preorderOrder.findFirst({ where: { shop: SHOP, orderId: "7001" } })).email === "buyer@example.com");
   await webhook("orders/create", orderBody(7001, { id: 4242 }), { id: "ord-1" });
   await webhook("orders/create", orderBody(7001, { id: 4242 }), { id: "ord-1-retry" });
   check("orders: a redelivered webhook does not duplicate the line", (await db.preorderOrder.count({ where: { shop: SHOP, orderId: "7001" } })) === 1);
   await webhook("orders/create", { id: 7002, name: "#7002", customer: { id: 4242 }, line_items: [{ id: 1, variant_id: 222, properties: [] }] }, { id: "ord-2" });
   check("orders: lines that are not pre-orders are ignored", (await db.preorderOrder.count({ where: { shop: SHOP, orderId: "7002" } })) === 0);
   check("orders: orders/cancelled stops ship-date emails for that order", (await webhook("orders/cancelled", { id: 7001 }, { id: "ord-c1" })).status === 200 && (await db.preorderOrder.findFirst({ where: { shop: SHOP, orderId: "7001" } })).status === "CANCELLED");
-  const flowForm = { waitlistEnabled: "on", fromName: "", replyToEmail: "", subject: "{{product}} is back", retentionDays: "90" };
+  const extraForm = { waitlistEnabled: "on", fromName: "", replyToEmail: "", subject: "{{product}} is back", retentionDays: "90" };
   const settingsRow = () => db.shopSettings.findUnique({ where: { shop: SHOP } });
-  check("flow emails: off by default, 3 days", await (async () => { const s = await settingsRow(); return s.emailSignupConfirmation === false && s.emailShipReminder === false && s.emailShipDateChange === false && s.shipReminderDays === 3; })());
-  await admin(SHOP, "/app/settings.data", { ...flowForm, emailSignupConfirmation: "on", emailShipReminder: "on", emailShipDateChange: "on", shipReminderDays: "5" });
-  check("flow emails: Settings saves the three toggles and the days", await (async () => { const s = await settingsRow(); return s.emailSignupConfirmation && s.emailShipReminder && s.emailShipDateChange && s.shipReminderDays === 5; })());
-  await admin(SHOP, "/app/settings.data", { ...flowForm, emailSignupConfirmation: "on", shipReminderDays: "0" });
-  check("flow emails: an invalid number of days is rejected and nothing else changes", (await settingsRow()).shipReminderDays === 5 && (await settingsRow()).emailShipReminder === true);
-  r = await signup("flowless@example.com");
-  check("flow emails: with Resend (not Flow) a signup queues no confirmation, and the signup itself still works", r.status === 200 && (await db.notificationDelivery.count({ where: { shop: SHOP, kind: "SIGNUP_CONFIRMATION" } })) === 0);
+  check("extra emails: off by default, 3 days", await (async () => { const s = await settingsRow(); return s.emailSignupConfirmation === false && s.emailShipReminder === false && s.emailShipDateChange === false && s.shipReminderDays === 3; })());
+  await admin(SHOP, "/app/settings.data", { ...extraForm, emailSignupConfirmation: "on", emailShipReminder: "on", emailShipDateChange: "on", shipReminderDays: "5" });
+  check("extra emails: Settings saves the three toggles and the days", await (async () => { const s = await settingsRow(); return s.emailSignupConfirmation && s.emailShipReminder && s.emailShipDateChange && s.shipReminderDays === 5; })());
+  await admin(SHOP, "/app/settings.data", { ...extraForm, emailSignupConfirmation: "on", shipReminderDays: "0" });
+  check("extra emails: an invalid number of days is rejected and nothing else changes", (await settingsRow()).shipReminderDays === 5 && (await settingsRow()).emailShipReminder === true);
+  r = await signup("newcomer@example.com");
+  check("extra emails: with Gmail connected and the toggle on, a signup queues a confirmation, and the signup itself still works", r.status === 200 && (await db.notificationDelivery.count({ where: { shop: SHOP, kind: "SIGNUP_CONFIRMATION" } })) === 1);
+  await waitFor(() => logs().some((l) => l.kind === "email" && /on the list/.test(l.subject ?? "")));
+  check("extra emails: the confirmation is sent through Gmail to the signup address", logs().some((l) => l.kind === "email" && l.to === "newcomer@example.com" && /on the list/.test(l.subject)));
 
   // ---- Gmail sending settings (nothing here contacts Gmail: no valid app password is ever submitted)
   const GPW = "abcdefghijklmnop", gmailRow = () => db.shopSettings.findUnique({ where: { shop: SHOP } });
@@ -255,14 +259,14 @@ try {
   const settingsPage = await (await admin(SHOP, "/app/settings.data")).text();
   check("gmail: Settings page data shows the address but never the app password or its ciphertext", settingsPage.includes("store@gmail.com") && !settingsPage.includes(GPW) && !settingsPage.includes((await gmailRow()).gmailPasswordEnc) && !settingsPage.includes("v1."));
   check("gmail: the notification activity page loads with Gmail configured", (await admin(SHOP, "/app/notifications.data")).status === 200);
-  r = await admin(SHOP, "/app/settings.data", { ...flowForm, gmailAddress: "other@gmail.com" });
+  r = await admin(SHOP, "/app/settings.data", { ...extraForm, gmailAddress: "other@gmail.com" });
   check("gmail: changing the address without its app password is refused and nothing changes", (await r.text()).includes("Enter the app password") && (await gmailRow()).gmailAddress === "store@gmail.com");
-  r = await admin(SHOP, "/app/settings.data", { ...flowForm, gmailAddress: "store@gmail.com", gmailPassword: "hunter2hunter2hunter2" });
+  r = await admin(SHOP, "/app/settings.data", { ...extraForm, gmailAddress: "store@gmail.com", gmailPassword: "hunter2hunter2hunter2" });
   const badPw = await r.text();
   check("gmail: a malformed password is rejected without being echoed, stored or logged", badPw.includes("not an app password") && !badPw.includes("hunter2") && !serverOut.includes("hunter2") && !JSON.stringify(await gmailRow()).includes("hunter2"));
-  r = await admin(SHOP, "/app/settings.data", { ...flowForm, gmailAddress: "store@gmail.com", dailySendCap: "5000" });
+  r = await admin(SHOP, "/app/settings.data", { ...extraForm, gmailAddress: "store@gmail.com", dailySendCap: "5000" });
   check("gmail: an out-of-range daily limit is rejected and the stored limit is kept", (await r.text()).includes("between 1 and 2000") && (await gmailRow()).dailySendCap === 400);
-  await admin(SHOP, "/app/settings.data", { ...flowForm, gmailAddress: "store@gmail.com", dailySendCap: "250" });
+  await admin(SHOP, "/app/settings.data", { ...extraForm, gmailAddress: "store@gmail.com", dailySendCap: "250" });
   check("gmail: the daily limit is saved, and saving without a password keeps the stored one", (await gmailRow()).dailySendCap === 250 && (await gmailRow()).gmailPasswordEnc?.startsWith("v1."));
   await admin(SHOP, "/app/settings.data", { intent: "disconnectGmail" });
   check("gmail: disconnect deletes the address and the stored password", await (async () => { const g = await gmailRow(); return g.gmailAddress === null && g.gmailPasswordEnc === null; })());

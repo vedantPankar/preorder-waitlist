@@ -1,6 +1,6 @@
-// Fixed wording for the emails the app sends itself (through Gmail). Shopify Flow sends its own, written in Flow.
+// Fixed wording for the emails the app sends itself (through the shop's Gmail).
 // The back-in-stock email lives in notify.server.js (buildEmail).
-import { escapeHtml } from "./mailer.server";
+import { escapeHtml } from "./html.server";
 
 const productName = (p) => (p.variantTitle ? `${p.productTitle} (${p.variantTitle})` : p.productTitle);
 const productUrl = (shop, handle) => `https://${shop}${handle ? `/products/${encodeURIComponent(handle)}` : ""}`;

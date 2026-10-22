@@ -1,7 +1,8 @@
 // Preloaded into the server process (NODE_OPTIONS=--import). Intercepts outbound
-// fetch: Shopify Admin GraphQL and the email provider. State lives in a JSON
-// file the e2e script controls; every outbound call is appended to a log.
+// fetch (Shopify Admin GraphQL) and the SMTP transport the Gmail sender builds (nodemailer).
+// State lives in a JSON file the e2e script controls; every outbound call is appended to a log.
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import nodemailer from "nodemailer";
 
 const STATE = process.env.E2E_STATE;
 const LOG = process.env.E2E_LOG;
@@ -9,13 +10,17 @@ const realFetch = globalThis.fetch;
 const log = (entry) => appendFileSync(LOG, JSON.stringify(entry) + "\n");
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
+// Gmail sending goes through nodemailer: accept every message and log it instead of opening a connection.
+nodemailer.createTransport = () => ({
+  verify: async () => true,
+  sendMail: async (message) => {
+    log({ kind: "email", to: message.to, subject: message.subject });
+    return { messageId: "mock", accepted: [message.to] };
+  },
+});
+
 globalThis.fetch = async (input, init = {}) => {
   const url = typeof input === "string" ? input : input.url;
-  if (url.includes("api.resend.com")) {
-    const body = JSON.parse(init.body);
-    log({ kind: "email", to: body.to[0], subject: body.subject });
-    return json({ id: "mock" });
-  }
   if (/\.myshopify\.com\/admin\/api\/[^/]+\/graphql\.json/.test(url)) {
     const { query, variables } = JSON.parse(init.body);
     const state = JSON.parse(readFileSync(STATE, "utf8"));
