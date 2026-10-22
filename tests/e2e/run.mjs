@@ -217,12 +217,10 @@ try {
   check("click: tracked link redirects to the product path and counts the click", r.status === 302 && r.headers.get("location").startsWith("/products/") && (await db.notificationDelivery.findUnique({ where: { id: delivery.id } })).clickCount === 1, `${r.status} ${r.headers.get("location")}`);
   r = await fetch(proxyUrl("r/not-a-real-token-value", {}), { redirect: "manual" });
   check("click: unknown token goes to the storefront home, no error", r.status === 302 && r.headers.get("location") === "/");
-  for (const p of ["/demand", "/notifications", "/campaigns", `/campaigns/${camp.id}`]) {
+  for (const p of ["/notifications", "/campaigns", `/campaigns/${camp.id}`]) {
     r = await admin(SHOP, `/app${p}.data`);
     check(`admin: page /app${p} loads`, r.status === 200, `${r.status}`);
   }
-  r = await admin(SHOP, "/app/demand.data?period=7&sort=waiting&q=Shoe");
-  check("admin: demand page accepts filters and shows this shop's data", r.status === 200 && (await r.text()).includes("Shoe"));
   r = await admin(OTHER, "/app/campaigns.data");
   check("admin: other shop sees none of this shop's campaigns", r.status === 200 && !(await r.text()).includes("Launch"));
   await admin(SHOP, `/app/campaigns/${camp.id}.data`, { intent: "delete" });

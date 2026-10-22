@@ -19,7 +19,7 @@ export function settingsView(row) {
     retentionDays: s.retentionDays ?? 90, waitlistEnabled: s.waitlistEnabled ?? true, requirePreorderLogin: s.requirePreorderLogin ?? false,
     gmailAddress: s.gmailAddress ?? "", gmailConfigured: Boolean(s.gmailAddress && s.gmailPasswordEnc), dailySendCap: s.dailySendCap ?? DEFAULT_DAILY_CAP, // never the password, not even encrypted
     emailSignupConfirmation: s.emailSignupConfirmation ?? false, emailPreorderConfirmation: s.emailPreorderConfirmation ?? false, emailShipReminder: s.emailShipReminder ?? false, emailShipDateChange: s.emailShipDateChange ?? false, shipReminderDays: s.shipReminderDays ?? 3,
-    restockCoveragePct: s.restockCoveragePct ?? 50, restockBuffer: s.restockBuffer ?? 0, trackClicks: s.trackClicks ?? false,
+    trackClicks: s.trackClicks ?? false,
     defaultButtonText: s.defaultButtonText ?? "Pre-Order Now", defaultMaxQuantity: s.defaultMaxQuantity ?? "", defaultTargetUnits: s.defaultTargetUnits ?? "",
     defaultShowCountdown: s.defaultShowCountdown ?? false, defaultShowProgress: s.defaultShowProgress ?? false,
     buttonStyle: s.buttonStyle ?? "solid", buttonColor: s.buttonColor ?? "#006F5C", buttonTextColor: s.buttonTextColor ?? "#FFFFFF",
@@ -78,8 +78,6 @@ export function parseSettingsForm(form, current, { isValidEmail, cleanText }) {
   const data = {
     fromName: text("fromName", 80) || null, replyToEmail: replyToEmail || null, subject,
     retentionDays: intField("retentionDays", { min: 1, max: 3650, message: "Enter a number of days between 1 and 3650." }),
-    restockCoveragePct: intField("restockCoveragePct", { min: 1, max: 100, message: "Enter a whole number between 1 and 100." }),
-    restockBuffer: intField("restockBuffer", { min: 0, max: 100000, message: "Enter a whole number of 0 or more." }),
     // A blank address keeps the stored one (use "Disconnect Gmail" to remove it). The password is handled by the route, never here.
     gmailAddress: gmailRaw || v.gmailAddress || null,
     dailySendCap: intField("dailySendCap", { min: 1, max: MAX_DAILY_CAP, message: `Enter a whole number between 1 and ${MAX_DAILY_CAP}.` }),

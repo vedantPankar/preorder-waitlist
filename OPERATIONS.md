@@ -67,7 +67,7 @@ Prisma with **SQLite** (`schema.prisma` hard-codes `file:dev.sqlite`). Migration
 `prisma/migrations` are SQLite SQL. Before a production deployment move to a server database
 (for example Postgres): change the provider/URL and regenerate the migrations. The reservation
 logic uses plain conditional `UPDATE`s plus a token, which is correct on Postgres too. Note that
-Postgres `contains` filters are case-sensitive (add `mode: "insensitive"` to the demand and waitlist searches).
+Postgres `contains` filters are case-sensitive (add `mode: "insensitive"` to the waitlist searches).
 
 Apply migrations: `npx prisma migrate deploy` (the Docker `setup` script does this).
 

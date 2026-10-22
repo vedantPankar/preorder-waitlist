@@ -39,8 +39,8 @@ test("invalid values are rejected field by field", () => {
 test("blank optional limit clears it; a form without a field keeps the stored value", () => {
   const cur = { defaultMaxQuantity: 7, defaultTargetUnits: 9, buttonColor: "#123456", displayCustomized: true, waitlistEnabled: false };
   assert.equal(parseSettingsForm(f({ _form: "settings", defaultMaxQuantity: "" }), cur, deps).data.defaultMaxQuantity, null);
-  const keep = parseSettingsForm(f({ restockBuffer: "3" }), cur, deps).data;
-  assert.deepEqual([keep.defaultMaxQuantity, keep.defaultTargetUnits, keep.buttonColor, keep.waitlistEnabled, keep.restockBuffer], [7, 9, "#123456", false, 3]);
+  const keep = parseSettingsForm(f({ subject: "Hello {{product}}" }), cur, deps).data;
+  assert.deepEqual([keep.defaultMaxQuantity, keep.defaultTargetUnits, keep.buttonColor, keep.waitlistEnabled, keep.subject], [7, 9, "#123456", false, "Hello {{product}}"]);
 });
 
 test("require-login toggle: off by default, saved from the form, kept when the form omits it", async () => {
@@ -48,7 +48,7 @@ test("require-login toggle: off by default, saved from the form, kept when the f
   assert.equal(parseSettingsForm(f({ _form: "settings" }), null, deps).data.requirePreorderLogin, false);
   const on = parseSettingsForm(f({ _form: "settings", requirePreorderLogin: "on" }), null, deps).data;
   assert.equal(on.requirePreorderLogin, true);
-  assert.equal(parseSettingsForm(f({ restockBuffer: "3" }), { requirePreorderLogin: true }, deps).data.requirePreorderLogin, true);
+  assert.equal(parseSettingsForm(f({ subject: "Hello {{product}}" }), { requirePreorderLogin: true }, deps).data.requirePreorderLogin, true);
   await db.shopSettings.upsert({ where: { shop: "login.myshopify.com" }, create: { shop: "login.myshopify.com", ...on }, update: on });
   assert.equal((await db.shopSettings.findUnique({ where: { shop: "login.myshopify.com" } })).requirePreorderLogin, true);
   await db.shopSettings.deleteMany({ where: { shop: "login.myshopify.com" } });

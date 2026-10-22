@@ -123,7 +123,7 @@ model ShopSettings {
   gmailAuthErrorAt        DateTime?
   // Sends per day through the Gmail account (shared across shops using the same account; see EmailQuota).
   dailySendCap            Int     @default(400)
-  // Restock recommendation rule: suggested units = ceil(waiting * coveragePct / 100) + buffer.
+  // Unused (the restock recommendation rule was removed with Demand Intelligence); kept to avoid a destructive migration.
   restockCoveragePct Int       @default(50)
   restockBuffer      Int       @default(0)
   // Opt-in: route email links through the app so clicks can be counted. Off by default (privacy).

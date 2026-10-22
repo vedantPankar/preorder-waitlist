@@ -69,12 +69,12 @@ test("settings: new emails are off by default, 3 days, validated, saved and kept
   const conf = parseSettingsForm(f({ _form: "settings", emailPreorderConfirmation: "on", shipReminderDays: "3" }), null, deps).data;
   assert.equal(conf.emailPreorderConfirmation, true);
   assert.equal(parseSettingsForm(f({ _form: "settings", shipReminderDays: "3" }), conf, deps).data.emailPreorderConfirmation, false, "an unchecked box turns it off");
-  assert.equal(parseSettingsForm(f({ restockBuffer: "1" }), conf, deps).data.emailPreorderConfirmation, true, "a form without the field keeps it");
+  assert.equal(parseSettingsForm(f({ subject: "Hello {{product}}" }), conf, deps).data.emailPreorderConfirmation, true, "a form without the field keeps it");
   const on = parseSettingsForm(f({ _form: "settings", emailSignupConfirmation: "on", emailShipReminder: "on", emailShipDateChange: "on", shipReminderDays: "5" }), null, deps).data;
   assert.deepEqual([on.emailSignupConfirmation, on.emailShipReminder, on.emailShipDateChange, on.shipReminderDays], [true, true, true, 5]);
   const off = parseSettingsForm(f({ _form: "settings", shipReminderDays: "3" }), on, deps).data;
   assert.deepEqual([off.emailSignupConfirmation, off.emailShipReminder, off.emailShipDateChange], [false, false, false], "unchecked boxes turn them off");
-  assert.equal(parseSettingsForm(f({ restockBuffer: "1" }), on, deps).data.emailShipReminder, true, "a form without the field keeps the stored value");
+  assert.equal(parseSettingsForm(f({ subject: "Hello {{product}}" }), on, deps).data.emailShipReminder, true, "a form without the field keeps the stored value");
   for (const bad of ["0", "61", "2.5", "x", ""]) assert.ok(parseSettingsForm(f({ _form: "settings", shipReminderDays: bad }), null, deps).errors?.shipReminderDays, `days ${JSON.stringify(bad)}`);
   const shop = newShop();
   await db.shopSettings.upsert({ where: { shop }, create: { shop, ...on }, update: on });

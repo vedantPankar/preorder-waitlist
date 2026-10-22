@@ -201,12 +201,6 @@ export default function Settings() {
             <SettingRow title="Reply-to email"><s-text-field name="replyToEmail" label="Reply-to email" labelAccessibilityVisibility="exclusive" defaultValue={settings.replyToEmail} error={errors.replyToEmail} /></SettingRow>
           </Card>
 
-          <Card>
-            <SectionTitle icon="chart" tone="amber" title="Restock recommendation rule" sub="Demand Intelligence suggests a first restock quantity as: waiting customers × coverage % (rounded up) + buffer. It is a rule you control, not a forecast: not every waiting customer will buy." />
-            <SettingRow title="Cover this % of waiting customers"><s-number-field name="restockCoveragePct" label="Coverage percent" labelAccessibilityVisibility="exclusive" defaultValue={String(settings.restockCoveragePct)} min={1} max={100} error={errors.restockCoveragePct} /></SettingRow>
-            <SettingRow title="Extra buffer units"><s-number-field name="restockBuffer" label="Buffer units" labelAccessibilityVisibility="exclusive" defaultValue={String(settings.restockBuffer)} min={0} error={errors.restockBuffer} /></SettingRow>
-          </Card>
-
           <button type="submit" className="wp-btn primary" disabled={saving}>{saving ? "Saving…" : "Save settings"}</button>
         </form>
 
