@@ -35,7 +35,7 @@ export const action = async ({ request }) => {
     const current = await db.shopSettings.findUnique({ where: { shop } });
     try {
       await mailer.send({
-        to, subject: "Test email from PreOrder & Notify",
+        to, subject: "Test email from Mobi-Preorder & Back in Stock",
         text: "This is a test email. If you can read it, back-in-stock emails can be sent from your store.",
         html: "<p>This is a test email. If you can read it, back-in-stock emails can be sent from your store.</p>",
         fromName: current?.fromName || undefined, replyTo: current?.replyToEmail || undefined,

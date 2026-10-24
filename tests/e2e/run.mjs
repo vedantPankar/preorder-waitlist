@@ -117,18 +117,15 @@ try {
   check("admin: other shop cannot delete this shop's entry", !!(await db.waitlistEntry.findUnique({ where: { id: aliceId } })));
   await admin(SHOP, "/app/waitlist.data", { intent: "remove", ids: aliceId });
   check("admin: owner can remove an entry", (await db.waitlistEntry.findUnique({ where: { id: aliceId } }))?.status === "REMOVED");
-  for (const p of ["", "/preorders", "/products", "/settings"]) {
+  for (const p of ["", "/preorders", "/email-templates", "/settings"]) {
     r = await admin(SHOP, p ? `/app${p}.data` : "/app.data?_routes=routes%2Fapp%2Croutes%2Fapp._index");
     check(`admin: page /app${p} loads`, r.status === 200, `${r.status}`);
   }
 
   // ---- pre-orders
-  r = await admin(SHOP, "/app/products.data", { intent: "save", variantId: "gid://shopify/ProductVariant/111", buttonText: "Reserve Yours", shipDate: "2026-12-24", maxQuantity: "3", enabled: "true" });
-  let cfg = await db.preorderConfig.findFirst({ where: { shop: SHOP, variantId: "111" } });
-  check("preorder: config saved from admin", r.status === 200 && cfg?.buttonText === "Reserve Yours" && cfg.maxQuantity === 3, `${r.status} ${JSON.stringify(cfg)}`);
-  check("preorder: variant switched to continue-selling", logs().some((l) => l.kind === "policy" && l.policy === "CONTINUE"));
-  r = await admin(SHOP, "/app/products.data", { intent: "save", variantId: "111", buttonText: "x", shipDate: "", enabled: "true" });
-  check("preorder: missing ship date rejected, config unchanged", (await db.preorderConfig.findFirst({ where: { shop: SHOP, variantId: "111" } }))?.buttonText === "Reserve Yours");
+  // Stand-alone config row (the app creates these rows through campaigns; seeded directly here)
+  await db.preorderConfig.create({ data: { shop: SHOP, productId: "999", variantId: "111", productTitle: "Shoe", variantTitle: "Red", buttonText: "Reserve Yours", shipDate: new Date("2026-12-24"), maxQuantity: 3, previousInventoryPolicy: "DENY" } });
+  { const cur = JSON.parse(readFileSync(STATE, "utf8")); cur.variants.find((v) => v.id === 111).policy = "CONTINUE"; writeFileSync(STATE, JSON.stringify(cur)); }
   setQty(111, -2);
   await webhook("inventory_levels/update", { inventory_item_id: 5001, location_id: 1, available: -2 }, { id: "evt-pre-1" });
   r = await fetch(proxyUrl("config", { product: "999" }));
@@ -144,6 +141,35 @@ try {
   await db.preorderConfig.create({ data: { shop: OTHER, productId: "999", variantId: "111", productTitle: "Other", buttonText: "OTHER" } });
   const mine = await (await fetch(proxyUrl("config", { product: "999" }))).json();
   check("preorder: storefront config is shop-scoped", mine.variants.every((v) => v.buttonText !== "OTHER"));
+
+  // ---- public privacy policy (no login)
+  r = await fetch(`${BASE}/privacy`);
+  const policy = await r.text();
+  check("privacy: /privacy opens without a login and names the data the app stores", r.status === 200 && policy.includes("Privacy Policy") && policy.includes("Gmail") && policy.includes("info@mobidrag.com"), `${r.status}`);
+  check("privacy: the policy page sets no cookies", !r.headers.get("set-cookie"));
+  const home = await (await fetch(`${BASE}/`)).text();
+  check("name: the home page title and heading carry the app name", /<title>Mobi-Preorder &amp; Back in Stock<\/title>/.test(home) && home.includes("Mobi-Preorder &amp; Back in Stock"), home.slice(0, 200));
+
+  // ---- email templates (admin)
+  r = await admin(SHOP, "/app/email-templates.data", { intent: "save", emailTemplate: "modern", emailAccentColor: "#b42318", emailLogoUrl: "https://cdn.example.com/logo.png" });
+  let look = await db.shopSettings.findUnique({ where: { shop: SHOP } });
+  check("email templates: look saved from admin", r.status === 200 && look?.emailTemplate === "modern" && look.emailAccentColor === "#B42318" && look.emailLogoUrl === "https://cdn.example.com/logo.png", `${r.status} ${JSON.stringify(look)}`);
+  await admin(SHOP, "/app/email-templates.data", { intent: "save", emailTemplate: "fancy", emailAccentColor: "red", emailLogoUrl: "http://x.com/a.png" });
+  look = await db.shopSettings.findUnique({ where: { shop: SHOP } });
+  check("email templates: an invalid look is rejected and the saved one is kept", look?.emailTemplate === "modern" && look.emailAccentColor === "#B42318");
+  r = await admin(SHOP, "/app/email-templates.data", { intent: "preview", emailTemplate: "minimal", emailAccentColor: "nonsense", emailLogoUrl: "javascript:alert(1)", kind: "preorder" });
+  const previewText = await r.text();
+  check("email templates: preview renders a draft, falling back safely on bad values", r.status === 200 && previewText.includes("pre-order") && !previewText.includes("javascript:alert"), `${r.status}`);
+  await admin(OTHER, "/app/email-templates.data", { intent: "save", emailTemplate: "minimal", emailAccentColor: "#112233", emailLogoUrl: "" });
+  check("email templates: the look is per shop", (await db.shopSettings.findUnique({ where: { shop: SHOP } }))?.emailTemplate === "modern" && (await db.shopSettings.findUnique({ where: { shop: OTHER } }))?.emailTemplate === "minimal");
+  r = await admin(SHOP, "/app/email-templates.data", { intent: "save", emailTemplate: "elegant", emailAccentColor: "#B42318", emailLogoUrl: "", emailFont: "rounded", emailHeader: "none" });
+  look = await db.shopSettings.findUnique({ where: { shop: SHOP } });
+  check("email templates: template, font and header saved", r.status === 200 && look?.emailTemplate === "elegant" && look.emailFont === "rounded" && look.emailHeader === "none" && look.emailLogoUrl === null, JSON.stringify(look));
+  await admin(SHOP, "/app/email-templates.data", { intent: "save", emailTemplate: "dark", emailFont: "comic", emailHeader: "huge" });
+  check("email templates: an invalid font or header is rejected", (await db.shopSettings.findUnique({ where: { shop: SHOP } }))?.emailTemplate === "elegant");
+  const thumbText = await (await admin(SHOP, "/app/email-templates.data", { intent: "preview", emailTemplate: "bold", kind: "restock" })).text();
+  check("email templates: the preview returns a thumbnail for every template", thumbText.includes("thumbs") && ["bold", "elegant", "dark", "classic"].every((t) => thumbText.includes(t)));
+  await db.shopSettings.update({ where: { shop: SHOP }, data: { emailTemplate: "classic", emailAccentColor: null, emailLogoUrl: null, emailFont: null, emailHeader: null } });
 
   // ---- waitlist on/off setting (admin -> storefront)
   let cfgBody = await (await fetch(proxyUrl("config", { product: "999" }))).json();
@@ -203,7 +229,6 @@ try {
   await admin(SHOP, `/app/campaigns/${camp.id}.data`, { intent: "pause" });
   check("campaign: pausing closes selling and storefront reports it", logs().filter((l) => l.kind === "policy").at(-1).policy === "DENY" && (await (await fetch(proxyUrl("config", { product: "999" }))).json()).variants.find((v) => v.variantId === "222").phase === "paused");
   check("reserve: paused campaign refuses holds", (await reserveCall({})).status === 409);
-  check("campaign: Product configuration cannot edit a campaign-managed variant", await (async () => { const cfg2 = await db.preorderConfig.findFirst({ where: { shop: SHOP, variantId: "222" } }); await admin(SHOP, "/app/products.data", { intent: "remove", id: cfg2.id }); return !!(await db.preorderConfig.findUnique({ where: { id: cfg2.id } })); })());
   check("campaign: other shop cannot control it", await (async () => { await admin(OTHER, `/app/campaigns/${camp.id}.data`, { intent: "delete" }); return !!(await db.campaign.findUnique({ where: { id: camp.id } })); })());
 
   // scheduler endpoint (external cron) and click tracking

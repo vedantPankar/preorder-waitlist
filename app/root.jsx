@@ -1,5 +1,7 @@
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 
+export const meta = () => [{ title: "Mobi-Preorder & Back in Stock" }];
+
 export default function App() {
   return (
     <html lang="en">

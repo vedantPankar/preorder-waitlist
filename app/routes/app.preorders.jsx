@@ -78,7 +78,7 @@ export default function Preorders() {
       <Card flush>
         <div className="wp-card-head wp-pad" style={{ marginBottom: 0 }}><h2>{shown.length} variant{shown.length === 1 ? "" : "s"}</h2></div>
         {shown.length === 0 ? (
-          <div className="wp-empty">{rows.length === 0 ? <>No pre-order products yet. <a href="/app/products">Configure a product</a>.</> : "No variants match these filters."}</div>
+          <div className="wp-empty">{rows.length === 0 ? <>No pre-order products yet. <a href="/app/campaigns/new">Create a campaign</a>.</> : "No variants match these filters."}</div>
         ) : (
           <div className="wp-table-wrap">
             <table className="wp-table">

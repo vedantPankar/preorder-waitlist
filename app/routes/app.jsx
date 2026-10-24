@@ -23,8 +23,8 @@ export default function App() {
         <s-link href="/app/waitlist">Waitlist</s-link>
         <s-link href="/app/preorders">Pre-orders</s-link>
         <s-link href="/app/campaigns">Campaigns</s-link>
-        <s-link href="/app/products">Product configuration</s-link>
         <s-link href="/app/notifications">Notification activity</s-link>
+        <s-link href="/app/email-templates">Email templates</s-link>
         <s-link href="/app/settings">Settings</s-link>
       </s-app-nav>
       <Outlet />

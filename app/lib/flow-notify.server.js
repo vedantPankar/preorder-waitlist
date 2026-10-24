@@ -3,6 +3,7 @@
 // and Notification activity page as restock emails, distinguished by `kind`.
 // (The file keeps its historical name; it no longer has anything to do with Shopify Flow.)
 import { randomBytes } from "node:crypto";
+import { brandFromSettings } from "./email-layout.server";
 import { buildPreorderConfirmationEmail, buildShipEmail, buildSignupConfirmationEmail } from "./email-templates.server";
 import { MAX_ATTEMPTS, backoffMs } from "./notify.server";
 import { effectiveShipDate } from "./campaign.server";
@@ -179,9 +180,10 @@ export async function processFlowDeliveries(db, { shop, mailer, now = new Date()
       to = entry.email;
     }
     try {
-      const body = delivery.kind === "SIGNUP_CONFIRMATION" ? buildSignupConfirmationEmail({ shop, ...p })
-        : delivery.kind === "PREORDER_CONFIRMATION" ? buildPreorderConfirmationEmail({ shop, ...p })
-        : buildShipEmail(delivery.kind, { shop, ...p });
+      const brand = brandFromSettings(settings);
+      const body = delivery.kind === "SIGNUP_CONFIRMATION" ? buildSignupConfirmationEmail({ shop, ...p, brand })
+        : delivery.kind === "PREORDER_CONFIRMATION" ? buildPreorderConfirmationEmail({ shop, ...p, brand })
+        : buildShipEmail(delivery.kind, { shop, ...p, brand });
       await mailer.send({ to, ...body, fromName: settings?.fromName || undefined, replyTo: settings?.replyToEmail || undefined, idempotencyKey: delivery.id });
       await finish(d, delivery, { status: "ACCEPTED", acceptedAt: new Date(), lastError: null }, "ACCEPTED");
       summary.sent++;

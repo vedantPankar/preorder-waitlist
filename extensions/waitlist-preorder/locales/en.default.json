@@ -1,10 +1,5 @@
 {
-  "ratings": {
-    "stars": {
-      "label": "Ratings"
-    },
-    "home": {
-      "recommendationText": "Recommended Product!"
-    }
+  "app": {
+    "name": "Mobi-Preorder & Back in Stock"
   }
 }

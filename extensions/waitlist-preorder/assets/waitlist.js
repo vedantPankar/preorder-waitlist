@@ -2,6 +2,8 @@
   var C = window.WPCommon;
 
   function init(root) {
+    // Store-wide pause (the "Pause" app embed).
+    if (window.wpPaused) { root.hidden = true; return; }
     if (root.dataset.wpReady) return;
     root.dataset.wpReady = '1';
     var variants = JSON.parse(root.querySelector('[data-wp-variants]').textContent);

@@ -1,5 +1,5 @@
 {
-  "name": "waitlist-preorder",
+  "name": "mobi-preorder-back-in-stock",
   "private": true,
   "scripts": {
     "build": "react-router build",

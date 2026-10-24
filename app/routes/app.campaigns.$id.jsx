@@ -119,7 +119,7 @@ export default function CampaignEditor() {
               <SettingRow title="Show a progress bar" help="Based on units actually pre-ordered; reservations and estimates are never shown."><s-switch name="showProgress" label="Show a progress bar" labelAccessibilityVisibility="exclusive" defaultChecked={c.showProgress} error={errors.showProgress} /></SettingRow>
             </Card>
 
-            <Card title="Variants" sub="Variants stop selling at zero stock while the campaign is not live. Their original inventory setting is restored if you remove them or delete the campaign. Variants already set up in Product configuration or another campaign cannot be added.">
+            <Card title="Variants" sub="Variants stop selling at zero stock while the campaign is not live. Their original inventory setting is restored if you remove them or delete the campaign. Variants already set up in another campaign cannot be added.">
               {errors.variants && <Banner tone="critical">{errors.variants}</Banner>}
               {shown.map((v) => <input key={v.id} type="hidden" name="variantId" value={v.id} />)}
               {shown.length === 0 ? <p className="wp-muted" style={{ marginBottom: 12 }}>No variants selected.</p> : (

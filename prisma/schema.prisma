@@ -123,6 +123,13 @@ model ShopSettings {
   gmailAuthErrorAt        DateTime?
   // Sends per day through the Gmail account (shared across shops using the same account; see EmailQuota).
   dailySendCap            Int     @default(400)
+  // Look of the emails the app sends (see email-layout.server.js). null accent / logo = the default look.
+  emailTemplate           String  @default("classic")
+  emailAccentColor        String?
+  emailLogoUrl            String?
+  // null = the template's own font / header (see email-layout.server.js).
+  emailFont               String?
+  emailHeader             String?
   // Unused (the restock recommendation rule was removed with Demand Intelligence); kept to avoid a destructive migration.
   restockCoveragePct Int       @default(50)
   restockBuffer      Int       @default(0)

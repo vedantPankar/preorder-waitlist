@@ -27,7 +27,7 @@ export function settingsView(row) {
   };
 }
 
-/** Defaults the Product configuration and Campaign forms start from. */
+/** Defaults the Campaign forms start from. */
 export function formDefaults(row) {
   const v = settingsView(row);
   return { buttonText: v.defaultButtonText, maxQuantity: v.defaultMaxQuantity, targetUnits: v.defaultTargetUnits, showCountdown: v.defaultShowCountdown, showProgress: v.defaultShowProgress };

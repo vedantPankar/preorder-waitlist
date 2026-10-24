@@ -6,10 +6,11 @@ import { renderBlock } from "./storefront/render.mjs";
 const blocksDir = new URL("../extensions/waitlist-preorder/blocks/", import.meta.url);
 const schemaOf = (f) => JSON.parse(readFileSync(new URL(f, blocksDir), "utf8").match(/{%\s*schema\s*%}([\s\S]*?){%\s*endschema\s*%}/)[1]);
 const appBlocks = ["waitlist_button.liquid", "preorder_button.liquid"];
+const appEmbeds = ["pause_buttons.liquid"];
 
-test("all blocks (including the template's star rating) have a parseable schema and are present", () => {
-  const files = readdirSync(blocksDir);
-  for (const f of [...appBlocks, "star_rating.liquid"]) assert.ok(files.includes(f), f);
+test("the extension has exactly the two app blocks and the pause embed, each with a parseable schema", () => {
+  const files = readdirSync(blocksDir).sort();
+  assert.deepEqual(files, [...appBlocks, ...appEmbeds].sort(), "no leftover template blocks");
   for (const f of files) assert.ok(schemaOf(f).name, `${f} has a name`);
 });
 
@@ -65,3 +66,44 @@ test("pre-order block exposes campaign settings and accessible campaign markup",
   assert.match(po, /data-ended-text="This pre-order campaign has ended\."/);
   assert.match(po, /data-countdown-start="Pre-orders open in"/);
 });
+
+test("every block name fits Shopify's 25-character limit (a longer name makes the release fail)", () => {
+  for (const f of readdirSync(blocksDir)) assert.ok(schemaOf(f).name.length <= 25, `${f}: "${schemaOf(f).name}" is ${schemaOf(f).name.length} characters`);
+});
+
+test("the pause embed is an app embed in the head with one switch that defaults to paused", () => {
+  const s = schemaOf("pause_buttons.liquid");
+  assert.equal(s.target, "head");
+  assert.deepEqual(s.settings.filter((x) => x.id).map((x) => [x.id, x.type, x.default]), [["pause", "checkbox", true]]);
+  const src = readFileSync(new URL("pause_buttons.liquid", blocksDir), "utf8");
+  assert.match(src, /window\.wpPaused = true/);
+  assert.match(src, /\.wp-block \{ display: none !important; \}/);
+  assert.match(src, /\{%-? if block\.settings\.pause -%?\}/, "only acts while the setting is on");
+});
+
+for (const script of ["preorder.js", "waitlist.js"]) {
+  test(`${script} does nothing while the store is paused, and starts normally otherwise`, async () => {
+    const { runInNewContext } = await import("node:vm");
+    const code = readFileSync(new URL(`../extensions/waitlist-preorder/assets/${script}`, import.meta.url), "utf8");
+    const make = (paused) => {
+      const touched = [];
+      // A root that records every use; a paused store must only set `hidden`.
+      const root = new Proxy({ hidden: false, dataset: {} }, {
+        get: (t, k) => { if (k !== "hidden" && k !== "dataset") touched.push(String(k)); return t[k]; },
+        set: (t, k, v) => { t[k] = v; return true; },
+      });
+      const selector = script === "preorder.js" ? "[data-wp-preorder]" : "[data-wp-waitlist]";
+      const document = { readyState: "complete", addEventListener() {}, dispatchEvent() {}, querySelectorAll: (q) => (q === selector ? [root] : []) };
+      const window = { wpPaused: paused, WPCommon: {} };
+      window.document = document;
+      // The fake element is too bare for a normal start-up; an error there still proves start-up was attempted.
+      try { runInNewContext(code, { window, document, CustomEvent: function () {}, setInterval() {}, clearInterval() {}, console }); } catch { /* expected when not paused */ }
+      return { root, touched };
+    };
+    const paused = make(true);
+    assert.equal(paused.root.hidden, true, "hidden while paused");
+    assert.deepEqual(paused.touched, [], "paused: no other work was done on the block");
+    const normal = make(false);
+    assert.ok(normal.root.dataset.wpReady === "1" || normal.touched.includes("querySelector"), "not paused: initialisation was attempted");
+  });
+}

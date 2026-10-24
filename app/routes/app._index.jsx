@@ -6,6 +6,7 @@ import { getEmailStatus } from "../lib/shop-mailer.server";
 import { waitlistCounts } from "../lib/waitlist.server";
 import { parseDemandParams, signupSeries } from "../lib/demand.server";
 import { listCampaigns } from "../lib/campaign.server";
+import { themeLinksFor } from "../lib/theme-links.server";
 import { Badge, Banner, BarChart, Button, Card, Icon, Shell, PageHead, Stat, Svg, Thumb, entryLabel, entryTone, shortDate } from "../ui/ui.jsx";
 
 export const loader = async ({ request }) => {
@@ -29,6 +30,7 @@ export const loader = async ({ request }) => {
     campaigns: campaigns.reduce((acc, c) => ({ ...acc, [c.status]: (acc[c.status] ?? 0) + 1 }), {}),
     counts,
     preorderConfigs,
+    themeLinks: themeLinksFor(shop),
     preorderUnits: preorderUnits._sum.soldCount ?? 0,
     emailConfigured: emailStatus.configured, emailProblems: emailStatus.problems,
     lastNotifyError: settings?.lastNotifyError ?? null,
@@ -36,11 +38,10 @@ export const loader = async ({ request }) => {
 };
 
 export default function Dashboard() {
-  const { counts, preorderConfigs, preorderUnits, emailConfigured, emailProblems, lastNotifyError, campaigns, series, recent, campaignTotal } = useLoaderData();
+  const { counts, preorderConfigs, preorderUnits, emailConfigured, emailProblems, lastNotifyError, campaigns, series, recent, campaignTotal, themeLinks } = useLoaderData();
   const waiting = counts.ACTIVE + counts.SENDING;
   const steps = [
     { done: emailConfigured, title: "Connect Gmail", sub: "Enable back-in-stock notifications", href: "/app/settings#gmail-setup" },
-    { done: preorderConfigs > 0, title: "Enable pre-order on products", sub: "Select products or variants", href: "/app/products" },
     { done: campaignTotal > 0, title: "Create your first campaign", sub: "Set schedule, limits and messaging", href: "/app/campaigns/new" },
   ];
   const doneCount = steps.filter((x) => x.done).length;
@@ -104,6 +105,22 @@ export default function Dashboard() {
           </ul>
         </Card>
       </div>
+
+      <Card title="Show the buttons on your store" sub="The Pre-order and Notify Me buttons are theme blocks. Add them once to your product page; each variant then shows the right one automatically.">
+        <ol className="wp-steps">
+          <li>Click <strong>Add Pre-order button</strong>. Your theme editor opens on a product page with the block ready to place.</li>
+          <li>Click <strong>Save</strong> in the theme editor.</li>
+          <li>Repeat with <strong>Add Waitlist button</strong>, so sold-out variants offer “Notify me”. Place it right below the Pre-order button.</li>
+          <li>Open a product in your store to check. Pre-order shows for variants in a live campaign; the waitlist shows for sold-out variants.</li>
+        </ol>
+        <div className="wp-actions" style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 12 }}>
+          {themeLinks.preorder && <Button primary href={themeLinks.preorder} target="_top">Add Pre-order button</Button>}
+          {themeLinks.waitlist && <Button href={themeLinks.waitlist} target="_top">Add Waitlist button</Button>}
+          {themeLinks.editor && <Button href={themeLinks.editor} target="_top">Open the theme editor</Button>}
+        </div>
+        {themeLinks.pause && <p className="wp-muted" style={{ marginTop: 10 }}>Need to switch the buttons off for a while (for example between launches)? Turn on the pause switch: <a href={themeLinks.pause} target="_top">Pause the buttons</a>. Turn the embed off again in Theme settings, App embeds, to bring them back.</p>}
+        <p className="wp-muted" style={{ marginTop: 10 }}>Prefer to place them yourself? In the theme editor, open the product template, choose Add block, then Apps, and pick the block.</p>
+      </Card>
     </Shell>
   );
 }

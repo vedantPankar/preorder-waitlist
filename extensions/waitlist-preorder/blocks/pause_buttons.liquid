@@ -1,0 +1,19 @@
+{%- comment -%}
+  App embed: a store-wide switch. While this embed is turned on, the Pre-order and Notify Me buttons are hidden on every
+  page and their scripts do not start, so the theme's own Add to cart is left alone. Turn the embed off to show them again.
+{%- endcomment -%}
+{%- if block.settings.pause -%}
+  <script>window.wpPaused = true;</script>
+  <style>.wp-block { display: none !important; }</style>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Pause store buttons",
+  "target": "head",
+  "settings": [
+    { "type": "paragraph", "content": "Turn this embed on to hide the Pre-order and Notify Me buttons on your whole store without removing them from your theme. Turn it off to show them again." },
+    { "type": "checkbox", "id": "pause", "label": "Hide the buttons while this embed is on", "default": true }
+  ]
+}
+{% endschema %}

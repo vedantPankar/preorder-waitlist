@@ -41,7 +41,7 @@
   /* Merchant-only explanation (theme editor) of why the pre-order button is hidden. */
   function preorderHint(reason) {
     var hints = {
-      not_configured: 'Pre-order button is hidden: this variant is not enabled for pre-order in the app (Product configuration).',
+      not_configured: 'Pre-order button is hidden: this variant is not part of a pre-order campaign in the app.',
       sold_out: 'Pre-order button is hidden: the pre-order limit for this variant has been reached.',
       untracked_inventory: 'Pre-order button is hidden: this variant does not track inventory. Turn on "Track quantity" in Shopify.',
       in_stock: 'Pre-order button is hidden: this variant is still in stock. It appears once the stock reaches 0.',

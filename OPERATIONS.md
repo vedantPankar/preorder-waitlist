@@ -1,4 +1,4 @@
-# PreOrder & Notify: operations guide
+# Mobi-Preorder & Back in Stock: operations guide
 
 This app extends the Shopify React Router template. This file covers what you need to run
 it; the README covers the template itself.
@@ -41,6 +41,20 @@ curl -X POST https://YOUR_APP/api/notifications/run -H "Authorization: Bearer $C
 Call it every minute or so. It sends due notifications and applies campaign start/end
 transitions. It returns per-shop counts only (no customer data).
 
+## Theme blocks and the pause switch
+
+The extension has two **app blocks** (the merchant adds them to the product page: Dashboard > "Show the buttons on your store" has deep
+links that open the theme editor with each block ready to place) and one **app embed**, **Pause store buttons**
+(Theme settings > App embeds).
+
+* The embed is a store-wide switch. **While it is on**, both buttons are hidden on every page and their scripts do not start, so the
+  theme's own Add to cart / Buy it now are left alone (the Pre-order block normally hides them while it shows). **Turn it off** to bring
+  the buttons back. A new install has it off, so buttons show as soon as the blocks are placed.
+* The Dashboard links to it ("Pause the buttons"); the link opens App embeds with the switch already on.
+* How it works: the embed (in the head) sets `window.wpPaused` and a one-line style hiding `.wp-block`; `preorder.js` and `waitlist.js`
+  return before doing anything when the flag is set. Covered by `tests/blocks.test.mjs` and `tests/theme-links.test.mjs`.
+* Like the other theme files, the embed reaches stores only through `shopify app deploy`.
+
 ## Pre-order campaigns and limits: what is and is not guaranteed
 
 * Units **sold** are counted from Shopify inventory (negative stock) and refreshed by
@@ -73,7 +87,7 @@ Apply migrations: `npx prisma migrate deploy` (the Docker `setup` script does th
 
 ## API scopes and webhooks
 
-Scopes: `write_products, write_metaobjects, write_metaobject_definitions, read_inventory, read_customers`.
+Scopes: `write_products, read_inventory` (the app reads variants and inventory and sets each variant's inventory policy; it reads no customer data from Shopify).
 Webhooks: `app/uninstalled`, `app/scopes_update`, `inventory_levels/update` and the three privacy topics.
 
 **The pre-order confirmation and ship-date emails are dormant until the order webhooks are enabled.** The handlers
@@ -184,6 +198,39 @@ Reminders and change notices are only sent while the app is running its queue: u
 webhooks and privacy deletion against a fake SMTP transport. Check on the development store before relying on it:
 join a waitlist and expect the confirmation; place a pre-order and expect the pre-order confirmation (toggle on); then, bring its ship date inside the reminder window and press
 **Process queue now** for the reminder; edit the ship date and run the queue again for the change notice.
+
+## Email templates (how the emails look)
+
+**Email templates** in the app menu sets the look of all five emails (back in stock, signup confirmation, pre-order
+confirmation, ship-date reminder, ship-date change). It changes the HTML only: the wording, subjects and plain-text
+versions are fixed and identical in every template.
+
+* **Templates:** six, shown as a gallery of real renders of the email. **Classic** (default; the same markup the app has
+  always sent), **Modern** (card on a soft background, solid button), **Minimal** (clean, thin line, outlined button),
+  **Bold** (full-width colour band, large first line, big button), **Elegant** (serif, centred, hairline divider,
+  outlined button) and **Dark** (a dark card with light text, drawn explicitly: it does not depend on the mail client's
+  dark mode). All except Classic are table-based with inline styles only, so they render in Gmail and Outlook and fit a phone.
+* **Accent colour:** `#RRGGBB`. Used for the button, lines and bands; Classic only colours its link. The default colour
+  (`#006F5C`) is stored as "not set", so a shop that saves the default keeps the Classic look unchanged.
+* **Font style:** Sans-serif, Serif or Rounded, as safe system font stacks (no web fonts: mail apps ignore them). Blank =
+  "Template default" (Elegant is serif, every other template sans-serif). Classic only gets a font wrapper when one is chosen.
+* **Header:** Show logo, Show store name or Hide header. Blank = "Template default": the logo if one is set, otherwise the store
+  name (Classic: otherwise nothing). "Show logo" without a logo address falls back to the store name (Classic: nothing).
+* **Logo:** an `https://` image address (no upload). Anything else is refused on save, and an invalid stored value is
+  ignored when sending, so the email falls back to the store name. Product photos are not included in the emails.
+* **Storage:** `ShopSettings.emailTemplate` (default `classic`), `emailAccentColor`, `emailLogoUrl`, `emailFont`,
+  `emailHeader` (migrations `20261023120000_email_template_look` and `20261023150000_email_font_header`). Unknown or
+  invalid stored values render the default look. A shop that never opens the page sends exactly what it sent before.
+* **Delivery:** the look is applied when the email is built, in the queue (`notify.server.js`), the extra-email sender
+  (`flow-notify.server.js`) and the page's test send; the Gmail sender and click tracking (the link is the button) are untouched.
+  The layouts live in `app/lib/email-layout.server.js`; no extra Shopify lookups are made when sending.
+* **Preview and test:** the page previews each email with sample data, with a Desktop / Mobile (375 px) width toggle; **Send test email** sends the previewed email through
+  the shop's Gmail with a `[Test]` subject prefix.
+
+**Check on the development store:** open Email templates, try each template, a colour, a logo, the font styles and the three header
+styles, save, and send the test email to an inbox you own. Open it in Gmail (web and phone) and, if you can, Outlook. Then restock a waitlisted variant
+and confirm the real email looks the same, with click tracking on if you use it. Dark-mode rendering and the logo's appearance in
+real mail clients are not covered by the automated tests.
 
 ## Privacy
 

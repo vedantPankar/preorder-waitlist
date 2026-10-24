@@ -230,7 +230,7 @@ async function dropConfig(db, admin, shop, config) {
 /**
  * Creates or updates a campaign and its variants. Variant ids are re-fetched from
  * Shopify (so foreign ids are rejected). A variant already configured on its own
- * (Product configuration) or in another campaign is refused rather than silently adopted.
+ * or in another campaign is refused rather than silently adopted.
  */
 export async function saveCampaign(db, admin, shop, { id = null, input, variantIds = [], now = new Date() }) {
   const { errors, value } = validateCampaignInput(input);
@@ -245,7 +245,7 @@ export async function saveCampaign(db, admin, shop, { id = null, input, variantI
     const cfg = await db.preorderConfig.findUnique({ where: { shop_variantId: { shop, variantId: v.variantId } } });
     if (cfg && cfg.campaignId !== existing?.id) conflicts.push(v);
   }
-  if (conflicts.length) errors.variants = `${conflicts.length} selected variant(s) are already set up for pre-order elsewhere (another campaign or Product configuration). Remove them there first.`;
+  if (conflicts.length) errors.variants = `${conflicts.length} selected variant(s) are already set up for pre-order elsewhere (for example in another campaign). Remove them there first.`;
   if (Object.keys(errors).length) return { errors };
 
   // The button text lives on each variant's config (editable per variant); the campaign form sets it for all.

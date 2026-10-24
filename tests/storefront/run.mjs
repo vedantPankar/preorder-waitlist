@@ -489,7 +489,7 @@ const scenarios = [
     name: "theme editor: not-configured variant hint; out of stock shows the real button, no hint",
     variants: [V(1, { available: true, quantity: 10 }), V(2)], initial: 1, designMode: true, config: { waitlistEnabled: true, variants: [cfgVariant(2)] },
     run: `
-      t(/not enabled for pre-order/.test(q('[data-wp-hint]').textContent), 'not-configured hint');
+      t(/not part of a pre-order campaign/.test(q('[data-wp-hint]').textContent), 'not-configured hint');
       await pick(2);
       t(vis('[data-wp-button]') && !vis('[data-wp-hint]'), 'button shown, hint gone');`,
   },

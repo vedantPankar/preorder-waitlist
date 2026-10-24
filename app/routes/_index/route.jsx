@@ -18,9 +18,9 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+        <h1 className={styles.heading}>Mobi-Preorder &amp; Back in Stock</h1>
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          Take pre-orders and email shoppers when sold-out products return.
         </p>
         {showForm && (
           <Form className={styles.form} method="post" action="/auth/login">
@@ -36,18 +36,21 @@ export default function App() {
         )}
         <ul className={styles.list}>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Pre-order campaigns</strong>. Schedule launches with limits, a
+            countdown and a progress bar.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Back-in-stock waitlist</strong>. Shoppers sign up on sold-out
+            products and get one email when stock returns.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Emails from your own Gmail</strong>. Choose a template, colour
+            and logo for every email.
           </li>
         </ul>
+        <p className={styles.text}>
+          <a href="/privacy">Privacy Policy</a>
+        </p>
       </div>
     </div>
   );

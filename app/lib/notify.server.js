@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { escapeHtml } from "./html.server";
+import { brandFromSettings, renderEmail } from "./email-layout.server";
 
 export const MAX_ATTEMPTS = 3;
 export const STALE_SENDING_MS = 10 * 60 * 1000;
@@ -14,7 +14,7 @@ export const batchSize = (env = process.env) => {
 };
 export const backoffMs = (attempts) => BACKOFF_MS[Math.min(Math.max(attempts, 1), BACKOFF_MS.length) - 1];
 
-export function buildEmail({ shop, variant, settings, delivery }) {
+export function buildEmail({ shop, variant, settings, delivery, brand = brandFromSettings(settings) }) {
   const name = variant.variantTitle ? `${variant.productTitle} (${variant.variantTitle})` : variant.productTitle;
   const direct = `/products/${encodeURIComponent(variant.productHandle ?? "")}?variant=${variant.variantId}`;
   // Click tracking is opt-in: only then do links go through the app (/apps/waitlist/r/<token>).
@@ -25,7 +25,10 @@ export function buildEmail({ shop, variant, settings, delivery }) {
   return {
     subject,
     text: `Good news! ${name} is back in stock.\n\nGet it here: ${url}\n\nYou received this one-time email because you asked to be notified. We will not email you again about this product unless you sign up again.${tracking}`,
-    html: `<p>Good news! <strong>${escapeHtml(name)}</strong> is back in stock.</p><p><a href="${escapeHtml(url)}">View the product</a></p><p style="color:#6d7175;font-size:12px">You received this one-time email because you asked to be notified. We will not email you again about this product unless you sign up again.${escapeHtml(tracking)}</p>`,
+    html: renderEmail(brand, {
+      shop, paragraphs: [["Good news! ", { strong: name }, " is back in stock."]], button: { label: "View the product", url },
+      footer: `You received this one-time email because you asked to be notified. We will not email you again about this product unless you sign up again.${tracking}`,
+    }),
   };
 }
 

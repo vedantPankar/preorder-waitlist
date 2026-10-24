@@ -157,3 +157,22 @@
 .wp-steps { margin: 0; padding-left: 20px; } .wp-steps li { margin: 6px 0; }
 
 .wp-app .wp-progress { margin-top: 6px; } .wp-app .wp-progress progress { width: 100%; height: 8px; accent-color: var(--g); }
+
+/* Email templates page */
+.wp-tpls { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+.wp-tpl { position: relative; display: block; border: 2px solid var(--line); border-radius: 12px; padding: 10px; cursor: pointer; background: var(--card); }
+.wp-tpl:hover { border-color: #b5b9bd; }
+.wp-tpl:has(input:checked) { border-color: #006F5C; box-shadow: 0 0 0 1px #006F5C; }
+.wp-tpl:has(input:focus-visible) { outline: 2px solid #005bd3; outline-offset: 2px; }
+.wp-tpl input { position: absolute; opacity: 0; pointer-events: none; }
+.wp-tpl strong { display: block; margin-top: 8px; }
+.wp-tpl span.wp-muted { display: block; font-size: 12px; }
+/* A real render of the email, 600 px wide, scaled down to a thumbnail. */
+.wp-tpl-thumb { position: relative; width: 100%; height: 250px; overflow: hidden; border-radius: 8px; background: #fff; border: 1px solid var(--line); pointer-events: none; }
+.wp-tpl-thumb iframe { position: absolute; top: 0; left: 50%; margin-left: -300px; width: 600px; height: 625px; border: 0; background: #fff; transform: scale(.4); transform-origin: 50% 0; }
+.wp-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.wp-seg button { border: 0; background: var(--card); padding: 6px 14px; cursor: pointer; font: inherit; }
+.wp-seg button + button { border-left: 1px solid var(--line); }
+.wp-seg button.on { background: #006F5C; color: #fff; }
+.wp-email-stage { display: flex; justify-content: center; background: #f3f4f5; border-radius: 8px; padding: 8px; }
+.wp-email-frame { max-width: 100%; height: 560px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }

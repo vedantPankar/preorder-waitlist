@@ -1,4 +1,6 @@
-# Shopify App Template - React Router
+# Mobi-Preorder & Back in Stock
+
+Take pre-orders and email shoppers when sold-out products return. Built on the Shopify app template for React Router; the template's own notes follow.
 
 This is a template for building a [Shopify app](https://shopify.dev/docs/apps/getting-started) using [React Router](https://reactrouter.com/). It was forked from the [Shopify Remix app template](https://github.com/Shopify/shopify-app-template-remix) and converted to React Router.
 
@@ -6,7 +8,7 @@ Rather than cloning this repo, follow the [Quick Start steps](https://github.com
 
 Visit the [`shopify.dev` documentation](https://shopify.dev/docs/api/shopify-app-react-router) for more details on the React Router app package.
 
-> **PreOrder & Notify app:** see [OPERATIONS.md](./OPERATIONS.md) for environment variables, the notification queue, campaign limits and deployment notes.
+> **Mobi-Preorder & Back in Stock app:** see [OPERATIONS.md](./OPERATIONS.md) for environment variables, the notification queue, campaign limits and deployment notes.
 
 ## Upgrading from Remix
 
